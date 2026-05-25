@@ -103,35 +103,19 @@ export async function runPublish({
     "Git status",
   );
 
+  let commits = getReleaseCommits(cwd, githubRepository);
+  note(formatDetectedCommits(commits), "Detected commits");
+
   if (!dryRun) {
-    const shouldContinue = await stageUnstagedFiles(cwd, status.unstaged);
+    const commitFlow = await prepareCommitFlow(cwd, status, commits);
 
-    if (!shouldContinue) return;
+    if (!commitFlow.shouldContinue) return;
 
-    const stagedStatus = getGitStatus(cwd);
-
-    if (stagedStatus.staged.length > 0) {
-      note(stagedStatus.staged.join("\n"), "Files ready to commit");
-      const commitMessage = await promptCommitMessage();
-
-      if (commitMessage === null) return;
-
-      commitWithMessage(cwd, commitMessage);
-      note(getLatestCommitSummary(cwd), "Created commit");
+    if (commitFlow.shouldReloadCommits) {
+      commits = getReleaseCommits(cwd, githubRepository);
+      note(formatDetectedCommits(commits), "Detected commits");
     }
   }
-
-  const commits = getCommitsSinceLatestTag(cwd).map((commit) => ({
-    ...parseConventionalCommit(commit.message),
-    sha: commit.sha,
-    shortSha: commit.shortSha,
-    url:
-      githubRepository === null
-        ? null
-        : buildGithubCommitUrl(githubRepository, commit.sha),
-  }));
-
-  note(formatDetectedCommits(commits), "Detected commits");
 
   const releaseType = getHighestReleaseType(commits);
 
@@ -263,6 +247,88 @@ export async function runPublish({
 
   log.success(`Published ${nextVersion}`);
   outro(`Release ${nextVersion} published.`);
+}
+
+async function prepareCommitFlow(
+  cwd: string,
+  status: ReturnType<typeof getGitStatus>,
+  commits: ReleaseCommit[],
+): Promise<{ shouldContinue: boolean; shouldReloadCommits: boolean }> {
+  const hasReleaseableCommits = getHighestReleaseType(commits) !== null;
+
+  if (status.unstaged.length > 0 && hasReleaseableCommits) {
+    const strategy = await promptUnstagedCommitStrategy();
+
+    if (strategy === null) {
+      return { shouldContinue: false, shouldReloadCommits: false };
+    }
+
+    if (strategy === "strict") {
+      log.info(
+        "Using detected commits only. Unstaged files will not be staged.",
+      );
+      return { shouldContinue: true, shouldReloadCommits: false };
+    }
+  }
+
+  const shouldContinue = await stageUnstagedFiles(cwd, status.unstaged);
+
+  if (!shouldContinue) {
+    return { shouldContinue: false, shouldReloadCommits: false };
+  }
+
+  const commitResult = await commitStagedFiles(cwd);
+
+  return {
+    shouldContinue: commitResult !== "cancelled",
+    shouldReloadCommits: commitResult === "committed",
+  };
+}
+
+async function promptUnstagedCommitStrategy(): Promise<
+  "strict" | "commit" | null
+> {
+  const strategy = await select<"strict" | "commit">({
+    message: "Detected releaseable commits and unstaged files. Continue how?",
+    initialValue: "strict",
+    options: [
+      {
+        value: "strict",
+        label: "Use detected commits only",
+        hint: "do not stage unstaged files",
+      },
+      {
+        value: "commit",
+        label: "Create additional commit",
+        hint: "choose unstaged files to stage",
+      },
+    ],
+  });
+
+  if (isCancel(strategy)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  return strategy;
+}
+
+async function commitStagedFiles(
+  cwd: string,
+): Promise<"committed" | "none" | "cancelled"> {
+  const stagedStatus = getGitStatus(cwd);
+
+  if (stagedStatus.staged.length === 0) return "none";
+
+  note(stagedStatus.staged.join("\n"), "Files ready to commit");
+  const commitMessage = await promptCommitMessage();
+
+  if (commitMessage === null) return "cancelled";
+
+  commitWithMessage(cwd, commitMessage);
+  note(getLatestCommitSummary(cwd), "Created commit");
+
+  return "committed";
 }
 
 async function promptMissingGithubToken(
@@ -442,6 +508,21 @@ function formatGithubDryRunPlan(
   plan: ReturnType<typeof resolveGithubReleaseDryRunPlan>,
 ): string {
   return `${plan.action} (${plan.reason})`;
+}
+
+function getReleaseCommits(
+  cwd: string,
+  githubRepository: ReturnType<typeof parseGitHubRemote>,
+): ReleaseCommit[] {
+  return getCommitsSinceLatestTag(cwd).map((commit) => ({
+    ...parseConventionalCommit(commit.message),
+    sha: commit.sha,
+    shortSha: commit.shortSha,
+    url:
+      githubRepository === null
+        ? null
+        : buildGithubCommitUrl(githubRepository, commit.sha),
+  }));
 }
 
 function getChangelogCommitReference(
