@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.0] - 2026-05-26 [(7c553ff)](https://github.com/Licentora/recon/commit/7c553ff26f764480e99dcbe47cfe2bac76dafbc5)
+
+### Features
+
+- enhance commit flow with improved handling of unstaged files and commit strategies
+
 ## [1.1.0] - 2026-05-26 [(421f808)](https://github.com/Licentora/recon/commit/421f80825d6d2b9c9233a24bf41c401d6ae82a52)
 
 ### Features
