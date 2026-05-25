@@ -16,6 +16,12 @@ export interface GitContext {
   latestTag: string | null;
 }
 
+export interface GitCommit {
+  sha: string;
+  shortSha: string;
+  message: string;
+}
+
 export function parseGitStatusPorcelain(output: string): GitStatus {
   const staged = new Set<string>();
   const unstaged = new Set<string>();
@@ -104,16 +110,30 @@ export function pushRelease(
 }
 
 export function getCommitMessagesSinceLatestTag(cwd: string): string[] {
+  return getCommitsSinceLatestTag(cwd).map((commit) => commit.message);
+}
+
+export function getCommitsSinceLatestTag(cwd: string): GitCommit[] {
   if (!hasCommitHistory(cwd)) return [];
 
   const latestTag = getLatestTag(cwd);
   const range = latestTag ? `${latestTag}..HEAD` : "HEAD";
-  const output = runGit(["log", range, "--format=%B%x1e"], cwd);
+  const output = runGit(["log", range, "--format=%H%x1f%h%x1f%B%x1e"], cwd);
 
   return output
     .split("\x1e")
-    .map((message) => message.trim())
-    .filter((message) => message.length > 0);
+    .map((record) => record.trim())
+    .filter((record) => record.length > 0)
+    .map((record) => {
+      const [sha = "", shortSha = "", ...messageParts] = record.split("\x1f");
+
+      return {
+        sha,
+        shortSha,
+        message: messageParts.join("\x1f").trim(),
+      };
+    })
+    .filter((commit) => commit.sha.length > 0 && commit.message.length > 0);
 }
 
 function normalizePorcelainPath(filePath: string): string {

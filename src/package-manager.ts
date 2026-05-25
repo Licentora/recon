@@ -37,11 +37,53 @@ export function updateLockfile(
   packageManager: PackageManager,
 ): void {
   const { command, args } = getLockfileUpdateCommand(packageManager);
+  const executable = getExecutableInvocation(command, args);
 
-  execFileSync(command, args, {
+  execFileSync(executable.command, executable.args, {
     cwd,
     stdio: "inherit",
   });
+}
+
+export function getExecutableInvocation(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): CommandSpec {
+  if (
+    platform === "win32" &&
+    (command === "npm" || command === "pnpm" || command === "yarn")
+  ) {
+    return {
+      command: "cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        getExecutableCommand(command, platform),
+        ...args,
+      ],
+    };
+  }
+
+  return {
+    command,
+    args,
+  };
+}
+
+export function getExecutableCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (
+    platform === "win32" &&
+    (command === "npm" || command === "pnpm" || command === "yarn")
+  ) {
+    return `${command}.cmd`;
+  }
+
+  return command;
 }
 
 export function getPackageManagerLockfile(

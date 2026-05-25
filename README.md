@@ -71,6 +71,8 @@ automatically adds `recon.json` to `.gitignore` and `.npmignore`.
 - Hidden changelog types do not appear in `CHANGELOG.md`.
 
 Tags use plain SemVer, for example `1.3.0` or `1.3.0-beta.0`.
+Generated changelog release headings include the release version, date, and the
+latest releaseable commit link when the Git remote is a GitHub repository.
 
 ## GitHub Releases
 
@@ -78,6 +80,10 @@ GitHub Releases use `GITHUB_TOKEN` from `recon.json`.
 
 For fine-grained personal access tokens, grant the target repository
 `Contents: Read and write` permission.
+
+If `GITHUB_TOKEN` is empty when `recon publish` starts, `recon` asks whether to
+save a token to `recon.json` and continue, or skip GitHub Release for that
+publish while still creating and pushing the Git tag.
 
 Release mode:
 

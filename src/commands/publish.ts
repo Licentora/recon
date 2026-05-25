@@ -8,6 +8,7 @@ import {
   multiselect,
   note,
   outro,
+  password,
   select,
   text,
 } from "@clack/prompts";
@@ -17,19 +18,23 @@ import {
   prependReleaseChangelog,
 } from "../changelog/changelog.js";
 import type { PrereleaseChannel, ReconConfig } from "../config.js";
-import { readReconConfig } from "../config.js";
+import { readReconConfig, writeReconConfig } from "../config.js";
 import {
+  buildGithubCommitUrl,
   createGithubRelease,
   parseGitHubRemote,
   resolveGithubReleaseDryRunPlan,
   resolveGithubReleasePlan,
   resolveGithubTokenFromConfig,
+  shouldPromptForGithubToken,
+  withGithubReleaseSkipped,
+  withGithubReleaseToken,
 } from "../github-release.js";
 import {
   commitRelease,
   commitWithMessage,
   createReleaseTag,
-  getCommitMessagesSinceLatestTag,
+  getCommitsSinceLatestTag,
   getGitContext,
   getGitStatus,
   getLatestCommitSummary,
@@ -51,11 +56,18 @@ import {
   readPackageVersion,
   updatePackageJsonFileVersion,
 } from "../package-json.js";
+import { ensureReconConfigIgnored, isGitTracked } from "../ignore-files.js";
 
 interface RunPublishOptions {
   cwd: string;
   dryRun: boolean;
 }
+
+type ReleaseCommit = ConventionalCommit & {
+  sha: string;
+  shortSha: string;
+  url: string | null;
+};
 
 export async function runPublish({
   cwd,
@@ -63,9 +75,21 @@ export async function runPublish({
 }: RunPublishOptions): Promise<void> {
   intro(dryRun ? "recon publish --dry" : "recon publish");
 
-  const config = await readReconConfig(cwd);
+  let config = await readReconConfig(cwd);
+
+  const configAfterTokenPrompt = await promptMissingGithubToken(
+    cwd,
+    config,
+    dryRun,
+  );
+
+  if (configAfterTokenPrompt === null) return;
+
+  config = configAfterTokenPrompt;
+
   const currentVersion = await readPackageVersion(cwd);
   const gitContext = getGitContext(cwd);
+  const githubRepository = parseGitHubRemote(gitContext.remote.url);
   const status = getGitStatus(cwd);
 
   note(
@@ -97,9 +121,15 @@ export async function runPublish({
     }
   }
 
-  const commits = getCommitMessagesSinceLatestTag(cwd).map(
-    parseConventionalCommit,
-  );
+  const commits = getCommitsSinceLatestTag(cwd).map((commit) => ({
+    ...parseConventionalCommit(commit.message),
+    sha: commit.sha,
+    shortSha: commit.shortSha,
+    url:
+      githubRepository === null
+        ? null
+        : buildGithubCommitUrl(githubRepository, commit.sha),
+  }));
 
   note(formatDetectedCommits(commits), "Detected commits");
 
@@ -112,7 +142,7 @@ export async function runPublish({
 
   const githubRelease = config.github.release;
   const githubToken = resolveGithubTokenFromConfig(githubRelease);
-  const githubRepository = parseGitHubRemote(gitContext.remote.url);
+  const commitReference = getChangelogCommitReference(commits);
   const defaultPrereleaseChannel = getDefaultPrereleaseChannel(config);
   const stablePreview = resolveNextVersion(currentVersion, releaseType, {
     kind: "stable",
@@ -132,6 +162,7 @@ export async function runPublish({
       date: formatDate(new Date()),
       commits,
       config,
+      commitReference,
     });
 
     note(
@@ -172,6 +203,7 @@ export async function runPublish({
     date: formatDate(new Date()),
     commits,
     config,
+    commitReference,
   });
 
   const githubPlan = resolveGithubReleasePlan(githubRelease, {
@@ -231,6 +263,80 @@ export async function runPublish({
 
   log.success(`Published ${nextVersion}`);
   outro(`Release ${nextVersion} published.`);
+}
+
+async function promptMissingGithubToken(
+  cwd: string,
+  config: ReconConfig,
+  dryRun: boolean,
+): Promise<ReconConfig | null> {
+  if (!shouldPromptForGithubToken(config.github.release, { dryRun })) {
+    return config;
+  }
+
+  note(
+    [
+      "GITHUB_TOKEN is empty in recon.json.",
+      "GitHub Release needs this token, but Git tag and push can continue without creating a GitHub Release.",
+    ].join("\n"),
+    "GitHub Release token",
+  );
+
+  const tokenAction = await select<"input" | "skip">({
+    message: "How do you want to continue?",
+    initialValue: "input",
+    options: [
+      {
+        value: "input",
+        label: "Input GitHub token",
+        hint: "save token to recon.json, then continue",
+      },
+      {
+        value: "skip",
+        label: "Skip GitHub Release",
+        hint: "continue tag and push only",
+      },
+    ],
+  });
+
+  if (isCancel(tokenAction)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  if (tokenAction === "skip") {
+    log.warn("GitHub Release skipped for this publish.");
+    return withGithubReleaseSkipped(config);
+  }
+
+  await ensureReconConfigIgnored(cwd);
+
+  if (isGitTracked(cwd, "recon.json")) {
+    throw new Error(
+      "Cannot save GITHUB_TOKEN because recon.json is tracked by Git. Run `git rm --cached recon.json`, then rerun `recon publish`.",
+    );
+  }
+
+  const token = await password({
+    message: "Enter GitHub token (Fine-grained PAT, Contents: Read and write)",
+    validate(value) {
+      if (!value || value.trim().length === 0) {
+        return "GitHub token is required.";
+      }
+    },
+  });
+
+  if (isCancel(token)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  const updatedConfig = withGithubReleaseToken(config, token);
+
+  await writeReconConfig(cwd, updatedConfig);
+  log.success("GITHUB_TOKEN saved in recon.json.");
+
+  return updatedConfig;
 }
 
 async function promptReleaseSelection(
@@ -338,6 +444,19 @@ function formatGithubDryRunPlan(
   return `${plan.action} (${plan.reason})`;
 }
 
+function getChangelogCommitReference(
+  commits: ReleaseCommit[],
+): { sha: string; url: string | null } | undefined {
+  const commit = commits.find((item) => item.releaseType !== null);
+
+  if (!commit) return undefined;
+
+  return {
+    sha: commit.shortSha,
+    url: commit.url,
+  };
+}
+
 function formatDetectedCommits(commits: ConventionalCommit[]): string {
   if (commits.length === 0) return "No commits found.";
 
@@ -345,8 +464,10 @@ function formatDetectedCommits(commits: ConventionalCommit[]): string {
     .map((commit) => {
       const type = commit.type ?? "unknown";
       const releaseType = commit.releaseType ?? "no release";
+      const shortSha =
+        typeof commit.shortSha === "string" ? `${commit.shortSha} ` : "";
 
-      return `- ${type}: ${commit.description} (${releaseType})`;
+      return `- ${shortSha}${type}: ${commit.description} (${releaseType})`;
     })
     .join("\n");
 }

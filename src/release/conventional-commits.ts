@@ -7,6 +7,9 @@ export interface ConventionalCommit {
   description: string;
   isBreaking: boolean;
   releaseType: ReleaseType | null;
+  sha?: string;
+  shortSha?: string;
+  url?: string | null;
 }
 
 const conventionalHeaderPattern =

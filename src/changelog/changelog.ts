@@ -6,6 +6,12 @@ interface GenerateReleaseChangelogOptions {
   date: string;
   commits: ConventionalCommit[];
   config: ReconConfig;
+  commitReference?: ChangelogCommitReference;
+}
+
+export interface ChangelogCommitReference {
+  sha: string;
+  url?: string | null;
 }
 
 export function generateReleaseChangelog({
@@ -13,6 +19,7 @@ export function generateReleaseChangelog({
   date,
   commits,
   config,
+  commitReference,
 }: GenerateReleaseChangelogOptions): string {
   const sections = config.changelog.types
     .filter((typeConfig) => typeConfig.hidden !== true)
@@ -25,7 +32,7 @@ export function generateReleaseChangelog({
 
   if (sections.length === 0) return "";
 
-  const lines = [`## ${version} - ${date}`, ""];
+  const lines = [formatReleaseHeading(version, date, commitReference), ""];
 
   for (const section of sections) {
     lines.push(`### ${section.section}`, "");
@@ -38,6 +45,22 @@ export function generateReleaseChangelog({
   }
 
   return lines.join("\n");
+}
+
+function formatReleaseHeading(
+  version: string,
+  date: string,
+  commitReference: ChangelogCommitReference | undefined,
+): string {
+  const prefix = `## [${version}] - ${date}`;
+
+  if (!commitReference) return prefix;
+
+  if (commitReference.url) {
+    return `${prefix} [(${commitReference.sha})](${commitReference.url})`;
+  }
+
+  return `${prefix} (${commitReference.sha})`;
 }
 
 export function prependReleaseChangelog(

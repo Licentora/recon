@@ -1,4 +1,4 @@
-import type { GithubReleaseConfig } from "./config.js";
+import type { GithubReleaseConfig, ReconConfig } from "./config.js";
 
 export interface GitHubRepository {
   owner: string;
@@ -70,6 +70,51 @@ export function resolveGithubTokenFromConfig(
   config: GithubReleaseConfig,
 ): string | null {
   return normalizeToken(config.GITHUB_TOKEN);
+}
+
+export function shouldPromptForGithubToken(
+  config: GithubReleaseConfig,
+  options: { dryRun: boolean },
+): boolean {
+  if (options.dryRun || config.enabled === false) return false;
+
+  return resolveGithubTokenFromConfig(config) === null;
+}
+
+export function withGithubReleaseToken(
+  config: ReconConfig,
+  token: string,
+): ReconConfig {
+  return {
+    ...config,
+    github: {
+      ...config.github,
+      release: {
+        ...config.github.release,
+        GITHUB_TOKEN: token.trim(),
+      },
+    },
+  };
+}
+
+export function withGithubReleaseSkipped(config: ReconConfig): ReconConfig {
+  return {
+    ...config,
+    github: {
+      ...config.github,
+      release: {
+        ...config.github.release,
+        enabled: false,
+      },
+    },
+  };
+}
+
+export function buildGithubCommitUrl(
+  repository: GitHubRepository,
+  sha: string,
+): string {
+  return `https://github.com/${repository.owner}/${repository.repo}/commit/${sha}`;
 }
 
 export function buildGithubReleaseRequest({
