@@ -1,0 +1,73 @@
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+import type { PackageManager } from "./config.js";
+
+export interface CommandSpec {
+  command: string;
+  args: string[];
+}
+
+export function getLockfileUpdateCommand(
+  packageManager: PackageManager,
+): CommandSpec {
+  if (packageManager === "npm") {
+    return {
+      command: "npm",
+      args: ["install", "--package-lock-only"],
+    };
+  }
+
+  if (packageManager === "pnpm") {
+    return {
+      command: "pnpm",
+      args: ["install", "--lockfile-only"],
+    };
+  }
+
+  return {
+    command: "yarn",
+    args: ["install", "--mode", "update-lockfile"],
+  };
+}
+
+export function updateLockfile(
+  cwd: string,
+  packageManager: PackageManager,
+): void {
+  const { command, args } = getLockfileUpdateCommand(packageManager);
+
+  execFileSync(command, args, {
+    cwd,
+    stdio: "inherit",
+  });
+}
+
+export function getPackageManagerLockfile(
+  packageManager: PackageManager,
+): string {
+  if (packageManager === "npm") return "package-lock.json";
+  if (packageManager === "pnpm") return "pnpm-lock.yaml";
+
+  return "yarn.lock";
+}
+
+export function getReleaseFilePaths(
+  cwd: string,
+  packageManager: PackageManager,
+  includeChangelog: boolean,
+): string[] {
+  const files = ["package.json"];
+  const lockfile = getPackageManagerLockfile(packageManager);
+
+  if (existsSync(join(cwd, lockfile))) {
+    files.push(lockfile);
+  }
+
+  if (includeChangelog) {
+    files.push("CHANGELOG.md");
+  }
+
+  return files;
+}
