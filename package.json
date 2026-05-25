@@ -1,0 +1,48 @@
+{
+  "name": "@licentora/recon",
+  "version": "1.0.0",
+  "description": "CLI tool for release control",
+  "type": "module",
+  "bin": {
+    "recon": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "release-control",
+    "release",
+    "control"
+  ],
+  "homepage": "https://github.com/Licentora/recon#readme",
+  "bugs": {
+    "url": "https://github.com/Licentora/recon/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Licentora/recon.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "author": "Licentora <support@licentora.com>",
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3"
+  }
+}
