@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.0] - 2026-05-26 [(421f808)](https://github.com/Licentora/recon/commit/421f80825d6d2b9c9233a24bf41c401d6ae82a52)
+
+### Features
+
+- enhance GitHub release process with token prompt and changelog commit references
+
+### Bug Fixes
+
+- enhance commit process with message prompt and streamline git commit handling
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
