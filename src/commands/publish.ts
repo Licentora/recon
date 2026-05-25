@@ -9,6 +9,7 @@ import {
   note,
   outro,
   select,
+  text,
 } from "@clack/prompts";
 
 import {
@@ -26,11 +27,12 @@ import {
 } from "../github-release.js";
 import {
   commitRelease,
-  commitWithEditor,
+  commitWithMessage,
   createReleaseTag,
   getCommitMessagesSinceLatestTag,
   getGitContext,
   getGitStatus,
+  getLatestCommitSummary,
   pushRelease,
   stageFiles,
   stageReleaseFiles,
@@ -86,13 +88,21 @@ export async function runPublish({
 
     if (stagedStatus.staged.length > 0) {
       note(stagedStatus.staged.join("\n"), "Files ready to commit");
-      commitWithEditor(cwd);
+      const commitMessage = await promptCommitMessage();
+
+      if (commitMessage === null) return;
+
+      commitWithMessage(cwd, commitMessage);
+      note(getLatestCommitSummary(cwd), "Created commit");
     }
   }
 
   const commits = getCommitMessagesSinceLatestTag(cwd).map(
     parseConventionalCommit,
   );
+
+  note(formatDetectedCommits(commits), "Detected commits");
+
   const releaseType = getHighestReleaseType(commits);
 
   if (!releaseType) {
@@ -134,7 +144,6 @@ export async function runPublish({
       ].join("\n"),
       "Dry run",
     );
-    note(formatDetectedCommits(commits), "Detected commits");
     note(
       changelogPreview || `Release ${stablePreview.version}\n`,
       "CHANGELOG.md preview",
@@ -202,6 +211,7 @@ export async function runPublish({
 
   stageReleaseFiles(cwd, releaseFiles);
   commitRelease(cwd, nextVersion);
+  note(getLatestCommitSummary(cwd), "Release commit");
   createReleaseTag(cwd, nextVersion);
   pushRelease(cwd, gitContext.remote.name, gitContext.branch, tag);
 
@@ -280,6 +290,31 @@ async function promptReleaseSelection(
     kind: "prerelease",
     channel,
   };
+}
+
+async function promptCommitMessage(): Promise<string | null> {
+  const commitMessage = await text({
+    message: "Commit message (Conventional Commit)",
+    placeholder: "feat: add release flow",
+    validate(value) {
+      const commitMessage = value?.trim() ?? "";
+
+      if (commitMessage.length === 0) {
+        return "Commit message is required.";
+      }
+
+      if (parseConventionalCommit(commitMessage).type === null) {
+        return "Use Conventional Commits format, for example `feat: add cli`.";
+      }
+    },
+  });
+
+  if (isCancel(commitMessage)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  return commitMessage;
 }
 
 function getDefaultPrereleaseChannel(config: ReconConfig): PrereleaseChannel {

@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export interface GitStatus {
   staged: string[];
@@ -71,16 +71,14 @@ export function stageReleaseFiles(cwd: string, files: string[]): void {
   stageFiles(cwd, files);
 }
 
-export function commitWithEditor(cwd: string): void {
-  const result = spawnSync("git", ["commit"], {
-    cwd,
+export function commitWithMessage(cwd: string, message: string): void {
+  runGit(["commit", "-m", message], cwd, {
     stdio: "inherit",
-    shell: false,
   });
+}
 
-  if (result.status !== 0) {
-    throw new Error("Git commit failed or was cancelled.");
-  }
+export function getLatestCommitSummary(cwd: string): string {
+  return runGit(["log", "-1", "--format=%h %s"], cwd).trim();
 }
 
 export function commitRelease(cwd: string, version: string): void {
