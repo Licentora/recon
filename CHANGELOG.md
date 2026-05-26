@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.0] - 2026-05-26 [(b56de84)](https://github.com/Licentora/recon/commit/b56de84e492dcead5b54b815c31c0aa3eeb2169a)
+
+### Features
+
+- add npm publish target support
+
 ## [1.2.0] - 2026-05-26 [(7c553ff)](https://github.com/Licentora/recon/commit/7c553ff26f764480e99dcbe47cfe2bac76dafbc5)
 
 ### Features
