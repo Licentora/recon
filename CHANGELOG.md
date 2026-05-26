@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.7.0] - 2026-05-27 [(304cbc2)](https://github.com/Licentora/recon/commit/304cbc25080d7fbd343a0c6a064b5793ca1fac13)
+
+### Features
+
+- add preflight checks and recovery flow
+  - Validate GitHub Release access before mutating release files
+  - Validate npm token, package availability, and package dry-run before commit and push
+  - Add recovery mode for incomplete releases from existing release commits and tags
+  - Add Git, GitHub, and npm helpers for publish recovery
+  - Document preflight and recovery behavior in README
+
+This prevents selected publish targets from failing only after the release commit, tag, and push have already completed.
+
 ## [1.6.0] - 2026-05-27 [(f786316)](https://github.com/Licentora/recon/commit/f7863164a96002189d690a14e108a844a99e30fe)
 
 ### Features
