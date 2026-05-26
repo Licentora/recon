@@ -37,8 +37,18 @@ export function generateReleaseChangelog({
   for (const section of sections) {
     lines.push(`### ${section.section}`, "");
 
-    for (const commit of section.commits) {
-      lines.push(`- ${commit.description}`);
+    const entries = section.commits.map((commit) =>
+      formatCommitChangelogEntry(commit),
+    );
+
+    for (const [index, entry] of entries.entries()) {
+      lines.push(...entry);
+
+      const nextEntry = entries[index + 1];
+
+      if (nextEntry && (entry.length > 1 || nextEntry.length > 1)) {
+        lines.push("");
+      }
     }
 
     lines.push("");
@@ -61,6 +71,31 @@ function formatReleaseHeading(
   }
 
   return `${prefix} (${commitReference.sha})`;
+}
+
+function formatCommitChangelogEntry(commit: ConventionalCommit): string[] {
+  const lines = [`- ${commit.description}`];
+  const details = [commit.body, commit.footer]
+    .map((detail) => detail.trim())
+    .filter(Boolean);
+
+  if (details.length === 0) return lines;
+
+  lines.push("");
+
+  for (const [index, detail] of details.entries()) {
+    lines.push(...indentMarkdownBlock(detail));
+
+    if (index < details.length - 1) {
+      lines.push("");
+    }
+  }
+
+  return lines;
+}
+
+function indentMarkdownBlock(value: string): string[] {
+  return value.split(/\r?\n/).map((line) => (line ? `  ${line}` : ""));
 }
 
 export function prependReleaseChangelog(

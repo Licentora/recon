@@ -149,6 +149,8 @@ commit when the remote is a GitHub repository:
 ```
 
 Release sections are grouped by visible changelog types from `recon.json`.
+If a Conventional Commit includes a body or footer, `recon` renders those
+details under the related changelog item.
 
 ## Publish Flow
 

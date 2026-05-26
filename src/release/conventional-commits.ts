@@ -5,6 +5,8 @@ export interface ConventionalCommit {
   type: string | null;
   scope: string | null;
   description: string;
+  body: string;
+  footer: string;
   isBreaking: boolean;
   releaseType: ReleaseType | null;
   sha?: string;
@@ -21,6 +23,7 @@ export function parseConventionalCommit(message: string): ConventionalCommit {
   const raw = message.trim();
   const header = raw.split(/\r?\n/, 1)[0] ?? "";
   const match = conventionalHeaderPattern.exec(header);
+  const details = splitCommitDetails(raw);
 
   if (!match?.groups) {
     return {
@@ -28,6 +31,8 @@ export function parseConventionalCommit(message: string): ConventionalCommit {
       type: null,
       scope: null,
       description: header,
+      body: details.body,
+      footer: details.footer,
       isBreaking: false,
       releaseType: null,
     };
@@ -43,6 +48,8 @@ export function parseConventionalCommit(message: string): ConventionalCommit {
     type,
     scope: match.groups.scope ?? null,
     description,
+    body: details.body,
+    footer: details.footer,
     isBreaking,
     releaseType: getReleaseType(type, isBreaking),
   };
@@ -68,4 +75,54 @@ function getReleaseType(type: string, isBreaking: boolean): ReleaseType | null {
   if (type === "fix" || type === "perf") return "patch";
 
   return null;
+}
+
+function splitCommitDetails(raw: string): { body: string; footer: string } {
+  const [, ...detailLines] = raw.split(/\r?\n/);
+  const detailText = detailLines.join("\n").trim();
+
+  if (detailText.length === 0) {
+    return { body: "", footer: "" };
+  }
+
+  const blocks = detailText
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+
+  const lastBlock = blocks.at(-1);
+
+  if (lastBlock && isFooterBlock(lastBlock)) {
+    return {
+      body: blocks.slice(0, -1).join("\n\n"),
+      footer: lastBlock,
+    };
+  }
+
+  return {
+    body: blocks.join("\n\n"),
+    footer: "",
+  };
+}
+
+function isFooterBlock(block: string): boolean {
+  const lines = block.split("\n").map((line) => line.trimEnd());
+  let hasFooterLine = false;
+
+  for (const line of lines) {
+    if (line.trim().length === 0) continue;
+
+    if (isFooterLine(line)) {
+      hasFooterLine = true;
+      continue;
+    }
+
+    if (!hasFooterLine) return false;
+  }
+
+  return hasFooterLine;
+}
+
+function isFooterLine(line: string): boolean {
+  return /^(?:BREAKING CHANGE|[A-Za-z0-9-]+)(?:: | #).+/.test(line);
 }
