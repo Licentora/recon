@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.5.0] - 2026-05-26 [(ab07807)](https://github.com/Licentora/recon/commit/ab07807bf6ba576bfa037182776d442a0bad5027)
+
+### Features
+
+- add historical changelog bootstrap
+  - Prompt during init to generate CHANGELOG.md from existing Conventional Commit history
+  - Add Select all option when staging unstaged files during publish
+  - Detect missing branch upstream and use git push -u on first publish
+  - Improve remote setup guidance for projects that have not been pushed before
+  - Document changelog bootstrap, Select all staging, and first upstream push behavior
+
 ## [1.4.3] - 2026-05-26 [(374359c)](https://github.com/Licentora/recon/commit/374359c454efae1ac7f95edf8620ad741f14e0bc)
 
 ### Bug Fixes
