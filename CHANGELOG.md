@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.2] - 2026-05-26 [(8afe4e8)](https://github.com/Licentora/recon/commit/8afe4e87273ca52145b0f0280c4c588682c868cd)
+
+### Bug Fixes
+
+- improve command execution and error handling
+  - Extract runCommandQuiet utility to dedicated command.ts module
+  - Update cli.ts to use new command execution utility
+  - Refactor git.ts command handling with improved error messages
+  - Update npm-publish.ts for better error reporting
+  - Enhance package-manager.ts command execution
+  - Improve error handling in publish command workflow
+
+  This refactoring centralizes command execution logic and provides
+  consistent error handling across the CLI application.
+
 ## [1.4.1] - 2026-05-26 [(2878206)](https://github.com/Licentora/recon/commit/2878206613f5f46631a9aba48b1252a9c9a4e295)
 
 ### Bug Fixes
