@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.1] - 2026-05-26 [(2878206)](https://github.com/Licentora/recon/commit/2878206613f5f46631a9aba48b1252a9c9a4e295)
+
+### Bug Fixes
+
+- handle markdown list formatting in commit details
+  - Add startsWithMarkdownList() to detect markdown list prefixes
+  - Only insert blank line when details don't start with lists
+  - Improves changelog formatting consistency
+
 ## [1.4.0] - 2026-05-26 [(f908964)](https://github.com/Licentora/recon/commit/f908964160a8bac8ed5e159c97dedaec2ceb0923)
 
 ### Features
