@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.4.0] - 2026-05-26 [(f908964)](https://github.com/Licentora/recon/commit/f908964160a8bac8ed5e159c97dedaec2ceb0923)
+
+### Features
+
+- include commit body and footer in release notes
+
+  - Parse Conventional Commit body and footer alongside the header
+  - Render body and footer under each changelog item with Prettier-compatible Markdown spacing
+  - Document that changelog generation now includes body and footer details
+
 ## [1.3.0] - 2026-05-26 [(b56de84)](https://github.com/Licentora/recon/commit/b56de84e492dcead5b54b815c31c0aa3eeb2169a)
 
 ### Features
