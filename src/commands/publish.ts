@@ -46,15 +46,19 @@ import {
   getGitContext,
   getGitStatus,
   getLatestCommitSummary,
+  pushBranch,
   pushRelease,
   stageFiles,
   stageReleaseFiles,
 } from "../git.js";
 import {
-  getHighestReleaseType,
   parseConventionalCommit,
   type ConventionalCommit,
 } from "../release/conventional-commits.js";
+import {
+  classifyCommitForPublish,
+  classifyPublishFlow,
+} from "../release/publish-flow.js";
 import {
   type ReleaseSelection,
   resolveNextVersion,
@@ -96,6 +100,63 @@ export async function runPublish({
   intro(dryRun ? "recon publish --dry" : "recon publish");
 
   let config = await readReconConfig(cwd);
+  const gitContext = getGitContext(cwd);
+  const githubRepository = parseGitHubRemote(gitContext.remote.url);
+  const status = getGitStatus(cwd);
+
+  note(
+    [
+      `Branch: ${gitContext.branch}`,
+      `Upstream: ${gitContext.upstream ?? "none"}`,
+      `Remote: ${gitContext.remote.name} (${gitContext.remote.url})`,
+      `Latest tag: ${gitContext.latestTag ?? "none"}`,
+      `Staged files: ${status.staged.length}`,
+      `Unstaged files: ${status.unstaged.length}`,
+    ].join("\n"),
+    "Git status",
+  );
+
+  let commits = getReleaseCommits(cwd, githubRepository);
+  note(formatDetectedCommits(commits, config), "Detected commits");
+
+  const initialFlow = classifyPublishFlow(commits, config);
+
+  if (initialFlow.kind === "error") {
+    throw new Error(initialFlow.reason);
+  }
+
+  if (!dryRun) {
+    const commitFlow = await prepareCommitFlow(cwd, status, commits, config);
+
+    if (!commitFlow.shouldContinue) return;
+
+    if (commitFlow.shouldReloadCommits) {
+      commits = getReleaseCommits(cwd, githubRepository);
+      note(formatDetectedCommits(commits, config), "Detected commits");
+    }
+  }
+
+  const publishFlow = classifyPublishFlow(commits, config);
+
+  if (publishFlow.kind === "error") {
+    throw new Error(publishFlow.reason);
+  }
+
+  if (publishFlow.kind === "push-only") {
+    runPushOnlyFlow({
+      cwd,
+      dryRun,
+      gitContext,
+      commits,
+    });
+    return;
+  }
+
+  if (publishFlow.kind === "none") {
+    outro(publishFlow.reason);
+    return;
+  }
+
   const selectedTargets = await promptPublishTargets(config.publish.targets);
 
   if (selectedTargets === null) return;
@@ -123,46 +184,10 @@ export async function runPublish({
   config = configAfterNpmTokenPrompt;
 
   const currentVersion = await readPackageVersion(cwd);
-  const gitContext = getGitContext(cwd);
-  const githubRepository = parseGitHubRemote(gitContext.remote.url);
-  const status = getGitStatus(cwd);
-
-  note(
-    [
-      `Branch: ${gitContext.branch}`,
-      `Upstream: ${gitContext.upstream ?? "none"}`,
-      `Remote: ${gitContext.remote.name} (${gitContext.remote.url})`,
-      `Latest tag: ${gitContext.latestTag ?? "none"}`,
-      `Staged files: ${status.staged.length}`,
-      `Unstaged files: ${status.unstaged.length}`,
-    ].join("\n"),
-    "Git status",
-  );
-
-  let commits = getReleaseCommits(cwd, githubRepository);
-  note(formatDetectedCommits(commits), "Detected commits");
-
-  if (!dryRun) {
-    const commitFlow = await prepareCommitFlow(cwd, status, commits);
-
-    if (!commitFlow.shouldContinue) return;
-
-    if (commitFlow.shouldReloadCommits) {
-      commits = getReleaseCommits(cwd, githubRepository);
-      note(formatDetectedCommits(commits), "Detected commits");
-    }
-  }
-
-  const releaseType = getHighestReleaseType(commits);
-
-  if (!releaseType) {
-    outro("Directory clean. No releaseable commits found.");
-    return;
-  }
-
+  const releaseType = publishFlow.releaseType;
   const githubRelease = config.github.release;
   const githubToken = resolveGithubTokenFromConfig(githubRelease);
-  const commitReference = getChangelogCommitReference(commits);
+  const commitReference = getChangelogCommitReference(commits, config);
   const defaultPrereleaseChannel = getDefaultPrereleaseChannel(config);
   const stablePreview = resolveNextVersion(currentVersion, releaseType, {
     kind: "stable",
@@ -483,8 +508,10 @@ async function prepareCommitFlow(
   cwd: string,
   status: ReturnType<typeof getGitStatus>,
   commits: ReleaseCommit[],
+  config: ReconConfig,
 ): Promise<{ shouldContinue: boolean; shouldReloadCommits: boolean }> {
-  const hasReleaseableCommits = getHighestReleaseType(commits) !== null;
+  const hasReleaseableCommits =
+    classifyPublishFlow(commits, config).kind === "versioning";
 
   if (status.unstaged.length > 0 && hasReleaseableCommits) {
     const strategy = await promptUnstagedCommitStrategy();
@@ -548,6 +575,72 @@ async function promptUnstagedCommitStrategy(): Promise<
   }
 
   return strategy;
+}
+
+function runPushOnlyFlow({
+  cwd,
+  dryRun,
+  gitContext,
+  commits,
+}: {
+  cwd: string;
+  dryRun: boolean;
+  gitContext: ReturnType<typeof getGitContext>;
+  commits: ReleaseCommit[];
+}): void {
+  note(
+    [
+      "Mode: push only",
+      "Version: unchanged",
+      "Tag: skipped",
+      "CHANGELOG.md: skipped",
+      "npm publish: skipped",
+      "GitHub Release: skipped",
+      `Hidden commits: ${commits.length}`,
+    ].join("\n"),
+    dryRun ? "Dry run" : "Push-only publish",
+  );
+
+  if (dryRun) {
+    outro("Dry run complete. No files changed.");
+    return;
+  }
+
+  try {
+    if (gitContext.upstream === null) {
+      note(
+        [
+          `Branch: ${gitContext.branch}`,
+          `Remote: ${gitContext.remote.name} (${gitContext.remote.url})`,
+          `Command: git push -u ${gitContext.remote.name} ${gitContext.branch}`,
+        ].join("\n"),
+        "First branch push",
+      );
+    }
+
+    pushBranch(cwd, gitContext.remote.name, gitContext.branch, {
+      setUpstream: gitContext.upstream === null,
+    });
+  } catch (error) {
+    throw new Error(
+      [
+        formatErrorMessage(error),
+        "No version, changelog, tag, npm publish, or GitHub Release was created.",
+        `After fixing Git remote or authentication, push manually with \`${formatBranchPushCommand(gitContext)}\`.`,
+      ].join("\n"),
+    );
+  }
+
+  note(
+    [
+      `Branch: ${gitContext.branch}`,
+      `Upstream: ${gitContext.upstream ?? `${gitContext.remote.name}/${gitContext.branch}`}`,
+      `Remote: ${gitContext.remote.name}`,
+      "Tag: skipped",
+    ].join("\n"),
+    "Pushed to Git",
+  );
+  outro("Done.");
 }
 
 async function commitStagedFiles(
@@ -1017,8 +1110,11 @@ function getReleaseCommits(
 
 function getChangelogCommitReference(
   commits: ReleaseCommit[],
+  config: ReconConfig,
 ): { sha: string; url: string | null } | undefined {
-  const commit = commits.find((item) => item.releaseType !== null);
+  const commit = commits.find(
+    (item) => classifyCommitForPublish(item, config).kind === "versioning",
+  );
 
   if (!commit) return undefined;
 
@@ -1028,19 +1124,37 @@ function getChangelogCommitReference(
   };
 }
 
-function formatDetectedCommits(commits: ConventionalCommit[]): string {
+function formatDetectedCommits(
+  commits: ConventionalCommit[],
+  config: ReconConfig,
+): string {
   if (commits.length === 0) return "No commits found.";
 
   return commits
     .map((commit) => {
       const type = commit.type ?? "unknown";
-      const releaseType = commit.releaseType ?? "no release";
+      const classification = classifyCommitForPublish(commit, config);
+      const releaseType = formatCommitPublishClassification(classification);
       const shortSha =
         typeof commit.shortSha === "string" ? `${commit.shortSha} ` : "";
 
       return `- ${shortSha}${type}: ${commit.description} (${releaseType})`;
     })
     .join("\n");
+}
+
+function formatCommitPublishClassification(
+  classification: ReturnType<typeof classifyCommitForPublish>,
+): string {
+  if (classification.kind === "versioning") {
+    return classification.releaseType;
+  }
+
+  if (classification.kind === "invalid-visible") {
+    return "invalid visible type";
+  }
+
+  return classification.kind;
 }
 
 async function stageUnstagedFiles(

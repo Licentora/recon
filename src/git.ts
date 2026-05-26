@@ -111,6 +111,20 @@ export function pushRelease(
   runGit(["push", remote, `refs/tags/${tag}`], cwd);
 }
 
+export function pushBranch(
+  cwd: string,
+  remote: string,
+  branch: string,
+  options: { setUpstream?: boolean } = {},
+): void {
+  runGit(
+    options.setUpstream
+      ? ["push", "-u", remote, branch]
+      : ["push", remote, branch],
+    cwd,
+  );
+}
+
 export function getCommitMessagesSinceLatestTag(cwd: string): string[] {
   return getCommitsSinceLatestTag(cwd).map((commit) => commit.message);
 }

@@ -132,6 +132,10 @@ These commands update `recon.json` without removing the other target.
 - `fix:` and `perf:` create a patch release.
 - `type!:` or a `BREAKING CHANGE:` footer creates a major release.
 - Hidden changelog types are excluded from `CHANGELOG.md`.
+- If every detected commit is configured as `hidden: true`, `recon publish`
+  only pushes the current Git branch.
+- Visible custom types without a SemVer mapping stop the publish with a clear
+  error.
 
 Tags use plain SemVer, for example:
 
@@ -155,7 +159,10 @@ details under the related changelog item.
 
 ## Publish Flow
 
-`recon publish` starts by asking where to publish this release:
+`recon publish` first checks the configured changelog types and decides whether
+the current commits require a versioned release.
+
+For versioned releases, `recon publish` asks where to publish this release:
 
 - `All`
 - `GitHub`
@@ -163,7 +170,12 @@ details under the related changelog item.
 
 The default follows `publish.targets` from `recon.json`.
 
-Then it:
+For hidden-only commits, such as a `docs:` commit when `docs` is configured with
+`hidden: true`, `recon publish` skips this prompt and runs a push-only flow.
+Push-only mode does not update `package.json`, write `CHANGELOG.md`, create a
+tag, publish to npm, or create a GitHub Release.
+
+For versioned releases, it then:
 
 1. Checks Git repository context, branch, remote, latest tag, and file status.
 2. Detects releaseable commits since the latest tag.
