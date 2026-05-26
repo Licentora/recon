@@ -14,6 +14,7 @@ export interface GitContext {
   branch: string;
   remote: GitRemote;
   latestTag: string | null;
+  upstream: string | null;
 }
 
 export interface GitCommit {
@@ -60,6 +61,7 @@ export function getGitContext(cwd: string): GitContext {
     branch: getCurrentBranch(cwd),
     remote: getDefaultRemote(cwd),
     latestTag: getLatestTag(cwd),
+    upstream: getCurrentBranchUpstream(cwd),
   };
 }
 
@@ -98,8 +100,14 @@ export function pushRelease(
   remote: string,
   branch: string,
   tag: string,
+  options: { setUpstream?: boolean } = {},
 ): void {
-  runGit(["push", remote, branch], cwd);
+  runGit(
+    options.setUpstream
+      ? ["push", "-u", remote, branch]
+      : ["push", remote, branch],
+    cwd,
+  );
   runGit(["push", remote, `refs/tags/${tag}`], cwd);
 }
 
@@ -114,6 +122,16 @@ export function getCommitsSinceLatestTag(cwd: string): GitCommit[] {
   const range = latestTag ? `${latestTag}..HEAD` : "HEAD";
   const output = runGit(["log", range, "--format=%H%x1f%h%x1f%B%x1e"], cwd);
 
+  return parseGitLogOutput(output);
+}
+
+export function getAllCommits(cwd: string): GitCommit[] {
+  if (!isGitRepository(cwd) || !hasCommitHistory(cwd)) return [];
+
+  return parseGitLogOutput(runGit(["log", "--format=%H%x1f%h%x1f%B%x1e"], cwd));
+}
+
+function parseGitLogOutput(output: string): GitCommit[] {
   return output
     .split("\x1e")
     .map((record) => record.trim())
@@ -150,6 +168,15 @@ function ensureGitRepository(cwd: string): void {
   }
 }
 
+function isGitRepository(cwd: string): boolean {
+  try {
+    ensureGitRepository(cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getCurrentBranch(cwd: string): string {
   const branch = runGit(["branch", "--show-current"], cwd).trim();
 
@@ -167,13 +194,28 @@ function getDefaultRemote(cwd: string): GitRemote {
     .filter(Boolean);
 
   if (!name) {
-    throw new Error("Git remote is required before publishing.");
+    throw new Error(
+      "Git remote is required before publishing. Add one with `git remote add origin <repository-url>`, then rerun `recon publish`.",
+    );
   }
 
   return {
     name,
     url: runGit(["remote", "get-url", name], cwd).trim(),
   };
+}
+
+function getCurrentBranchUpstream(cwd: string): string | null {
+  try {
+    const upstream = runGit(
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+      cwd,
+    ).trim();
+
+    return upstream.length > 0 ? upstream : null;
+  } catch {
+    return null;
+  }
 }
 
 function getLatestTag(cwd: string): string | null {

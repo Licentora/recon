@@ -113,6 +113,7 @@ legacy projects.
 3. GitHub Release settings when GitHub is selected.
 4. npm publish settings when npm is selected.
 5. Whether to save the required tokens in `recon.json`.
+6. Whether to create `CHANGELOG.md` from existing Conventional Commit history.
 
 You can add setup for one target later:
 
@@ -169,6 +170,7 @@ Then it:
 3. If releaseable commits exist and unstaged files also exist, asks whether to:
    - use detected commits only; or
    - create an additional commit from selected unstaged files.
+     The file picker includes `Select all` for large unstaged file sets.
 4. Asks whether to publish a stable release or prerelease.
 5. Updates `package.json` and the package-manager lockfile.
 6. Prepends `CHANGELOG.md`.
@@ -177,6 +179,9 @@ Then it:
 9. Pushes the branch and tag.
 10. Publishes to npm when selected.
 11. Creates a GitHub Release when selected.
+
+If the current branch has no upstream yet, `recon` uses `git push -u` for the
+branch push and then pushes the release tag.
 
 ## Dry Run
 

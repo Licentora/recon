@@ -130,6 +130,7 @@ export async function runPublish({
   note(
     [
       `Branch: ${gitContext.branch}`,
+      `Upstream: ${gitContext.upstream ?? "none"}`,
       `Remote: ${gitContext.remote.name} (${gitContext.remote.url})`,
       `Latest tag: ${gitContext.latestTag ?? "none"}`,
       `Staged files: ${status.staged.length}`,
@@ -354,13 +355,26 @@ export async function runPublish({
   }
 
   try {
-    pushRelease(cwd, gitContext.remote.name, gitContext.branch, tag);
+    if (gitContext.upstream === null) {
+      note(
+        [
+          `Branch: ${gitContext.branch}`,
+          `Remote: ${gitContext.remote.name} (${gitContext.remote.url})`,
+          `Command: git push -u ${gitContext.remote.name} ${gitContext.branch}`,
+        ].join("\n"),
+        "First branch push",
+      );
+    }
+
+    pushRelease(cwd, gitContext.remote.name, gitContext.branch, tag, {
+      setUpstream: gitContext.upstream === null,
+    });
   } catch (error) {
     throw new Error(
       [
         formatErrorMessage(error),
         `Release commit and tag already exist locally for ${tag}.`,
-        `After fixing Git remote or authentication, push manually with \`git push ${gitContext.remote.name} ${gitContext.branch}\` and \`git push ${gitContext.remote.name} refs/tags/${tag}\`.`,
+        `After fixing Git remote or authentication, push manually with \`${formatBranchPushCommand(gitContext)}\` and \`git push ${gitContext.remote.name} refs/tags/${tag}\`.`,
       ].join("\n"),
     );
   }
@@ -368,6 +382,7 @@ export async function runPublish({
   note(
     [
       `Branch: ${gitContext.branch}`,
+      `Upstream: ${gitContext.upstream ?? `${gitContext.remote.name}/${gitContext.branch}`}`,
       `Remote: ${gitContext.remote.name}`,
       `Tag: ${tag}`,
     ].join("\n"),
@@ -955,13 +970,21 @@ async function stageUnstagedFiles(
 ): Promise<boolean> {
   if (unstagedFiles.length === 0) return true;
 
+  const selectAllValue = "__recon_select_all__";
   const selectedFiles = await multiselect<string>({
     message: "Choose files to stage",
     required: true,
-    options: unstagedFiles.map((file) => ({
-      value: file,
-      label: file,
-    })),
+    options: [
+      {
+        value: selectAllValue,
+        label: "Select all",
+        hint: `stage ${unstagedFiles.length} files`,
+      },
+      ...unstagedFiles.map((file) => ({
+        value: file,
+        label: file,
+      })),
+    ],
   });
 
   if (isCancel(selectedFiles)) {
@@ -969,8 +992,27 @@ async function stageUnstagedFiles(
     return false;
   }
 
-  stageFiles(cwd, selectedFiles);
+  const filesToStage = selectedFiles.includes(selectAllValue)
+    ? unstagedFiles
+    : selectedFiles;
+
+  stageFiles(cwd, filesToStage);
+  note(
+    [`Staged files: ${filesToStage.length}`, ...filesToStage].join("\n"),
+    "Staged files",
+  );
+
   return true;
+}
+
+function formatBranchPushCommand(
+  gitContext: ReturnType<typeof getGitContext>,
+): string {
+  if (gitContext.upstream === null) {
+    return `git push -u ${gitContext.remote.name} ${gitContext.branch}`;
+  }
+
+  return `git push ${gitContext.remote.name} ${gitContext.branch}`;
 }
 
 async function readOptionalTextFile(filePath: string): Promise<string> {

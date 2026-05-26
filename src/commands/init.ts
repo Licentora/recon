@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   cancel,
@@ -6,11 +7,16 @@ import {
   intro,
   isCancel,
   log,
+  note,
   outro,
   password,
   select,
 } from "@clack/prompts";
 
+import {
+  generateReleaseChangelog,
+  prependReleaseChangelog,
+} from "../changelog/changelog.js";
 import {
   createDefaultReconConfig,
   type GithubReleaseEnabled,
@@ -21,13 +27,25 @@ import {
   type ReconConfig,
   writeReconConfig,
 } from "../config.js";
+import { buildGithubCommitUrl, parseGitHubRemote } from "../github-release.js";
+import { getAllCommits, getGitContext } from "../git.js";
 import { ensureReconConfigIgnored, isGitTracked } from "../ignore-files.js";
+import { readPackageVersion } from "../package-json.js";
+import {
+  parseConventionalCommit,
+  type ConventionalCommit,
+} from "../release/conventional-commits.js";
 
 interface RunInitOptions {
   target?: PublishTarget;
 }
 
 type PublishTargetChoice = "all" | PublishTarget;
+type HistoricalChangelogCommit = ConventionalCommit & {
+  sha: string;
+  shortSha: string;
+  url: string | null;
+};
 
 export async function runInit(
   cwd: string,
@@ -76,6 +94,8 @@ export async function runInit(
   if (!targets.includes("npm")) {
     log.info("npm publish setup skipped.");
   }
+
+  await maybeCreateHistoricalChangelog(cwd, config);
 
   outro("Recon setup complete.");
 }
@@ -460,4 +480,129 @@ function mapNpmPublishMode(mode: "auto" | "always"): NpmPublishEnabled {
   if (mode === "always") return true;
 
   return "auto";
+}
+
+async function maybeCreateHistoricalChangelog(
+  cwd: string,
+  config: ReconConfig,
+): Promise<void> {
+  const commits = getHistoricalChangelogCommits(cwd);
+
+  if (commits.length === 0) return;
+
+  let version: string;
+
+  try {
+    version = await readPackageVersion(cwd);
+  } catch (error) {
+    log.warn(
+      `${formatErrorMessage(error)} Historical CHANGELOG generation skipped.`,
+    );
+    return;
+  }
+
+  const releaseContent = generateReleaseChangelog({
+    version,
+    date: formatDate(new Date()),
+    commits,
+    config,
+    commitReference: getHistoricalChangelogCommitReference(commits),
+  });
+
+  if (releaseContent.length === 0) return;
+
+  const changelogPath = join(cwd, "CHANGELOG.md");
+  const hasExistingChangelog = existsSync(changelogPath);
+
+  note(
+    [
+      `Detected commits: ${commits.length}`,
+      `Version: ${version}`,
+      `Target file: CHANGELOG.md`,
+      hasExistingChangelog
+        ? "Mode: prepend historical release entry"
+        : "Mode: create new changelog",
+    ].join("\n"),
+    "Existing Git history",
+  );
+
+  const shouldCreateChangelog = await confirm({
+    message:
+      "Create a professional English CHANGELOG.md from all existing Conventional Commit history?",
+    initialValue: !hasExistingChangelog,
+  });
+
+  if (isCancel(shouldCreateChangelog)) {
+    cancel("Operation cancelled.");
+    return;
+  }
+
+  if (!shouldCreateChangelog) return;
+
+  const currentChangelog = await readOptionalTextFile(changelogPath);
+
+  await writeFile(
+    changelogPath,
+    prependReleaseChangelog(currentChangelog, releaseContent),
+  );
+  log.success("CHANGELOG.md updated from existing Git history.");
+}
+
+function getHistoricalChangelogCommits(
+  cwd: string,
+): HistoricalChangelogCommit[] {
+  const githubRepository = getGitHubRepository(cwd);
+
+  return getAllCommits(cwd).map((commit) => ({
+    ...parseConventionalCommit(commit.message),
+    sha: commit.sha,
+    shortSha: commit.shortSha,
+    url:
+      githubRepository === null
+        ? null
+        : buildGithubCommitUrl(githubRepository, commit.sha),
+  }));
+}
+
+function getGitHubRepository(
+  cwd: string,
+): ReturnType<typeof parseGitHubRemote> {
+  try {
+    return parseGitHubRemote(getGitContext(cwd).remote.url);
+  } catch {
+    return null;
+  }
+}
+
+function getHistoricalChangelogCommitReference(
+  commits: HistoricalChangelogCommit[],
+): { sha: string; url: string | null } | undefined {
+  const commit = commits.find((item) => item.releaseType !== null);
+
+  if (!commit) return undefined;
+
+  return {
+    sha: commit.shortSha,
+    url: commit.url,
+  };
+}
+
+async function readOptionalTextFile(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function formatDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
