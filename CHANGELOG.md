@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.1] - 2026-05-26 [(e7a1ca5)](https://github.com/Licentora/recon/commit/e7a1ca524e8f75deeae6b991545717a6f76ca7a4)
+
+### Bug Fixes
+
+- update changelog formatting and improve clarity in prompts
+
 ## [1.5.0] - 2026-05-26 [(ab07807)](https://github.com/Licentora/recon/commit/ab07807bf6ba576bfa037182776d442a0bad5027)
 
 ### Features
