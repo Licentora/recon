@@ -87,6 +87,10 @@ export function getLatestCommitSummary(cwd: string): string {
   return runGit(["log", "-1", "--format=%h %s"], cwd).trim();
 }
 
+export function getLatestCommitSubject(cwd: string): string {
+  return runGit(["log", "-1", "--format=%s"], cwd).trim();
+}
+
 export function commitRelease(cwd: string, version: string): void {
   runGit(["commit", "-m", `chore(release): ${version}`], cwd);
 }
@@ -123,6 +127,17 @@ export function pushBranch(
       : ["push", remote, branch],
     cwd,
   );
+}
+
+export function isTagAtHead(cwd: string, tag: string): boolean {
+  try {
+    const headSha = runGit(["rev-parse", "HEAD"], cwd).trim();
+    const tagSha = runGit(["rev-parse", `${tag}^{}`], cwd).trim();
+
+    return headSha.length > 0 && headSha === tagSha;
+  } catch {
+    return false;
+  }
 }
 
 export function getCommitMessagesSinceLatestTag(cwd: string): string[] {

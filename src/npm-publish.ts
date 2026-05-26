@@ -129,19 +129,63 @@ export async function preflightNpmPublish({
   await withTemporaryNpmConfig(config, distTag, async (userConfigPath) => {
     runNpm(["whoami"], cwd, userConfigPath);
 
-    const packageSpec = `${packageName}@${version}`;
-
-    try {
-      runNpm(["view", packageSpec, "version"], cwd, userConfigPath);
+    if (
+      isNpmPackageVersionPublishedWithConfig(
+        cwd,
+        packageName,
+        version,
+        userConfigPath,
+      )
+    ) {
       throw new Error(
         `npm package version already exists: ${packageName}@${version}`,
       );
-    } catch (error) {
-      if (isExpectedNpmNotFound(error)) return;
-
-      throw error;
     }
   });
+}
+
+export async function preflightNpmPackage({
+  cwd,
+  config,
+  distTag,
+}: PublishToNpmOptions): Promise<void> {
+  await withTemporaryNpmConfig(config, distTag, async (userConfigPath) => {
+    const command = getExecutableInvocation("npm", [
+      "publish",
+      "--dry-run",
+      "--access",
+      config.access,
+      "--tag",
+      distTag,
+    ]);
+
+    runCommandQuiet(command.command, command.args, {
+      cwd,
+      env: createNpmEnv(userConfigPath),
+    });
+  });
+}
+
+export async function isNpmPackageVersionPublished(
+  cwd: string,
+  config: NpmPublishConfig,
+  packageName: string,
+  version: string,
+): Promise<boolean> {
+  validatePackageNameForPublish(packageName);
+
+  let isPublished = false;
+
+  await withTemporaryNpmConfig(config, config.tag, async (userConfigPath) => {
+    isPublished = isNpmPackageVersionPublishedWithConfig(
+      cwd,
+      packageName,
+      version,
+      userConfigPath,
+    );
+  });
+
+  return isPublished;
 }
 
 async function withTemporaryNpmConfig(
@@ -200,6 +244,24 @@ function runNpm(args: string[], cwd: string, userConfigPath: string): void {
     cwd,
     env: createNpmEnv(userConfigPath),
   });
+}
+
+function isNpmPackageVersionPublishedWithConfig(
+  cwd: string,
+  packageName: string,
+  version: string,
+  userConfigPath: string,
+): boolean {
+  const packageSpec = `${packageName}@${version}`;
+
+  try {
+    runNpm(["view", packageSpec, "version"], cwd, userConfigPath);
+    return true;
+  } catch (error) {
+    if (isExpectedNpmNotFound(error)) return false;
+
+    throw error;
+  }
 }
 
 function createNpmEnv(userConfigPath: string): NodeJS.ProcessEnv {

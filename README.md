@@ -185,13 +185,15 @@ For versioned releases, it then:
      The file picker includes `Select all` for large unstaged file sets.
 4. Asks whether to publish the selected targets as a stable release or
    prerelease.
-5. Updates `package.json` and the package-manager lockfile.
-6. Prepends `CHANGELOG.md`.
-7. Creates a release commit.
-8. Creates a plain SemVer Git tag.
-9. Pushes the branch and tag.
-10. Publishes to npm when selected.
-11. Creates a GitHub Release when selected.
+5. Checks selected GitHub Release and npm publish access before mutating files.
+6. Updates `package.json` and the package-manager lockfile.
+7. Prepends `CHANGELOG.md`.
+8. Runs npm package validation when npm is selected.
+9. Creates a release commit.
+10. Creates a plain SemVer Git tag.
+11. Pushes the branch and tag.
+12. Publishes to npm when selected.
+13. Creates a GitHub Release when selected.
 
 If the current branch has no upstream yet, `recon` uses `git push -u` for the
 branch push and then pushes the release tag.
@@ -223,6 +225,11 @@ repository permission:
 
 - `Contents: Read and write`
 
+Before changing release files, `recon` checks that the token can access the
+target repository and that a GitHub Release for the next tag does not already
+exist. If the token is present but invalid or under-scoped, `recon` asks for a
+replacement token before continuing.
+
 If `GITHUB_TOKEN` is empty when GitHub is selected during `recon publish`,
 `recon` asks whether to save a token to `recon.json` or skip GitHub Release for
 that run.
@@ -244,6 +251,11 @@ selected during `recon publish`, `recon` asks whether to save a token to
 Before mutating release files, `recon` checks npm access with a temporary npm
 config file. During publish, the token is written only to that temporary file and
 removed after the npm command exits.
+
+If `NPM_TOKEN` is present but invalid or cannot access the registry, `recon`
+asks for a replacement token before continuing. After updating local release
+files but before committing, `recon` also runs npm publish dry-run validation so
+package build or packing errors stop before Git commit, tag, and push.
 
 Stable npm releases use the configured dist-tag, defaulting to `latest`.
 Prereleases use the same release/prerelease choice as GitHub Releases. If
@@ -267,14 +279,19 @@ back automatically.
 If Git commit, tag, and push succeed but GitHub Release creation fails:
 
 1. Fix the GitHub token or repository permissions.
-2. Create the GitHub Release from the existing tag.
-3. Do not rerun the full publish flow for the same version.
+2. Rerun `recon publish`.
+3. Confirm recovery for the existing tag.
 
 If Git push succeeds but npm publish fails:
 
 1. Fix the npm token, package access, or npm account requirement.
-2. Publish the already-bumped package manually with the intended dist-tag.
-3. Do not rerun the full publish flow for the same version.
+2. Rerun `recon publish`.
+3. Confirm recovery for the existing tag.
+
+Recovery mode is only offered when the current package version matches the
+latest plain SemVer tag, the tag points at `HEAD`, and the latest commit is the
+release commit for that version. Recovery never bumps version, rewrites
+`CHANGELOG.md`, creates a new tag, or pushes Git again.
 
 ## Security Notes
 

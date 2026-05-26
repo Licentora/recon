@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   cancel,
+  confirm,
   intro,
   isCancel,
   log,
@@ -30,7 +31,9 @@ import {
 import {
   buildGithubCommitUrl,
   createGithubRelease,
+  hasGithubReleaseForTag,
   parseGitHubRemote,
+  preflightGithubReleaseAccess,
   resolveGithubReleaseDryRunPlan,
   resolveGithubReleasePlan,
   resolveGithubTokenFromConfig,
@@ -45,7 +48,9 @@ import {
   getCommitsSinceLatestTag,
   getGitContext,
   getGitStatus,
+  getLatestCommitSubject,
   getLatestCommitSummary,
+  isTagAtHead,
   pushBranch,
   pushRelease,
   stageFiles,
@@ -65,6 +70,8 @@ import {
 } from "../release/release-selection.js";
 import { getReleaseFilePaths, updateLockfile } from "../package-manager.js";
 import {
+  isNpmPackageVersionPublished,
+  preflightNpmPackage,
   preflightNpmPublish,
   publishToNpm,
   resolveNpmPublishPlan,
@@ -153,6 +160,18 @@ export async function runPublish({
   }
 
   if (publishFlow.kind === "none") {
+    const didRecover = await maybeRunRecoveryFlow({
+      cwd,
+      dryRun,
+      config,
+      gitContext,
+      githubRepository,
+      status,
+      reason: publishFlow.reason,
+    });
+
+    if (didRecover) return;
+
     outro(publishFlow.reason);
     return;
   }
@@ -185,8 +204,8 @@ export async function runPublish({
 
   const currentVersion = await readPackageVersion(cwd);
   const releaseType = publishFlow.releaseType;
-  const githubRelease = config.github.release;
-  const githubToken = resolveGithubTokenFromConfig(githubRelease);
+  let githubRelease = config.github.release;
+  let githubToken = resolveGithubTokenFromConfig(githubRelease);
   const commitReference = getChangelogCommitReference(commits, config);
   const defaultPrereleaseChannel = getDefaultPrereleaseChannel(config);
   const stablePreview = resolveNextVersion(currentVersion, releaseType, {
@@ -224,6 +243,7 @@ export async function runPublish({
         `Prerelease channel: ${defaultPrereleaseChannel.name}`,
         `GitHub Release: ${formatGithubDryRunPlan(githubDryRunPlan)}`,
         `npm publish: ${formatNpmPublishPlan(npmPlan)}`,
+        "Preflight: skipped in dry run",
       ].join("\n"),
       "Dry run",
     );
@@ -285,6 +305,34 @@ export async function runPublish({
     note(npmPlan.reason, "npm publish skipped");
   }
 
+  let npmPackageName: string | null = null;
+
+  if (githubPlan.action === "create") {
+    if (githubToken === null || githubRepository === null) {
+      throw new Error("GitHub Release requirements were not resolved.");
+    }
+
+    config = await ensureGithubReleaseAccess({
+      cwd,
+      config,
+      repository: githubRepository,
+      tag,
+    });
+    githubRelease = config.github.release;
+    githubToken = resolveGithubTokenFromConfig(githubRelease);
+  }
+
+  if (npmPlan.action === "publish" && npmDistTag !== null) {
+    npmPackageName = await readPackageName(cwd);
+    config = await ensureNpmPublishAccess({
+      cwd,
+      config,
+      distTag: npmDistTag,
+      packageName: npmPackageName,
+      version: nextVersion,
+    });
+  }
+
   note(
     formatReleaseModeSummary(config, selection, nextVersion, {
       githubAction: githubPlan.action,
@@ -295,19 +343,7 @@ export async function runPublish({
     "Release mode",
   );
 
-  let npmPackageName: string | null = null;
-
   if (npmPlan.action === "publish" && npmDistTag !== null) {
-    npmPackageName = await readPackageName(cwd);
-
-    await preflightNpmPublish({
-      cwd,
-      config: config.npm.publish,
-      distTag: npmDistTag,
-      packageName: npmPackageName,
-      version: nextVersion,
-    });
-
     note(
       [
         `Package: ${npmPackageName}`,
@@ -361,6 +397,35 @@ export async function runPublish({
     ].join("\n"),
     "Prepared release",
   );
+
+  if (npmPlan.action === "publish" && npmDistTag !== null) {
+    try {
+      await preflightNpmPackage({
+        cwd,
+        config: config.npm.publish,
+        distTag: npmDistTag,
+      });
+    } catch (error) {
+      throw new Error(
+        [
+          formatErrorMessage(error),
+          `package.json was already updated to ${nextVersion}.`,
+          "Release commit, tag, push, npm publish, and GitHub Release were not created yet.",
+          "Fix the npm package validation error, then rerun `recon publish` or restore the release file changes before retrying.",
+        ].join("\n"),
+      );
+    }
+
+    note(
+      [
+        `Package: ${npmPackageName ?? "unknown"}`,
+        `Version: ${nextVersion}`,
+        `dist-tag: ${npmDistTag}`,
+        "Status: dry run passed",
+      ].join("\n"),
+      "npm package validation",
+    );
+  }
 
   try {
     stageReleaseFiles(cwd, releaseFiles);
@@ -442,7 +507,7 @@ export async function runPublish({
         [
           formatErrorMessage(error),
           `Git commit, tag, and push already completed for ${tag}.`,
-          `After fixing npm access, publish manually with \`npm publish --tag ${npmDistTag}\` from this version, or run a dedicated recovery flow when available.`,
+          "Fix npm access, then rerun `recon publish` to recover this release without bumping version again.",
         ].join("\n"),
       );
     }
@@ -476,7 +541,7 @@ export async function runPublish({
         [
           formatErrorMessage(error),
           `Git commit, tag, and push already completed for ${tag}.`,
-          "Fix the GitHub token permissions, then create the GitHub Release from the existing tag instead of rerunning the full publish flow.",
+          "Fix the GitHub token permissions, then rerun `recon publish` to recover this release without bumping version again.",
         ].join("\n"),
       );
     }
@@ -641,6 +706,384 @@ function runPushOnlyFlow({
     "Pushed to Git",
   );
   outro("Done.");
+}
+
+async function maybeRunRecoveryFlow({
+  cwd,
+  dryRun,
+  config,
+  gitContext,
+  githubRepository,
+  status,
+  reason,
+}: {
+  cwd: string;
+  dryRun: boolean;
+  config: ReconConfig;
+  gitContext: ReturnType<typeof getGitContext>;
+  githubRepository: ReturnType<typeof parseGitHubRemote>;
+  status: ReturnType<typeof getGitStatus>;
+  reason: string;
+}): Promise<boolean> {
+  const recovery = await getRecoverableRelease(cwd, gitContext);
+
+  if (recovery === null) return false;
+
+  if (dryRun) {
+    note(
+      [
+        `Reason: ${reason}`,
+        `Mode: recovery`,
+        `Version: ${recovery.version}`,
+        `Tag: ${recovery.tag}`,
+        `Selected targets: ${formatPublishTargets(config.publish.targets)}`,
+        "Git push: skipped",
+        "Version bump: skipped",
+      ].join("\n"),
+      "Recovery plan",
+    );
+    outro("Dry run complete. No files changed.");
+    return true;
+  }
+
+  const shouldRecover = await confirm({
+    message: `Recover incomplete release ${recovery.version}?`,
+    initialValue: true,
+  });
+
+  if (isCancel(shouldRecover)) {
+    cancel("Operation cancelled.");
+    return true;
+  }
+
+  if (!shouldRecover) return true;
+
+  if (status.staged.length > 0 || status.unstaged.length > 0) {
+    throw new Error(
+      "Recovery requires a clean working tree so npm does not publish unintended local changes.",
+    );
+  }
+
+  const selectedTargets = await promptPublishTargets(config.publish.targets);
+
+  if (selectedTargets === null) return true;
+
+  let recoveryConfig = applySelectedPublishTargets(config, selectedTargets);
+
+  const configAfterGithubTokenPrompt = await promptMissingGithubToken(
+    cwd,
+    recoveryConfig,
+    dryRun,
+  );
+
+  if (configAfterGithubTokenPrompt === null) return true;
+
+  recoveryConfig = configAfterGithubTokenPrompt;
+
+  const configAfterNpmTokenPrompt = await promptMissingNpmToken(
+    cwd,
+    recoveryConfig,
+    dryRun,
+  );
+
+  if (configAfterNpmTokenPrompt === null) return true;
+
+  recoveryConfig = configAfterNpmTokenPrompt;
+
+  const recovered: string[] = [];
+  const skipped: string[] = [];
+
+  if (recoveryConfig.publish.targets.includes("github")) {
+    await recoverGithubRelease({
+      cwd,
+      config: recoveryConfig,
+      repository: githubRepository,
+      release: recovery,
+      recovered,
+      skipped,
+    });
+  }
+
+  if (recoveryConfig.publish.targets.includes("npm")) {
+    recoveryConfig = await recoverNpmPublish({
+      cwd,
+      config: recoveryConfig,
+      release: recovery,
+      recovered,
+      skipped,
+    });
+  }
+
+  note(
+    [
+      `Version: ${recovery.version}`,
+      `Tag: ${recovery.tag}`,
+      `Recovered: ${recovered.join(", ") || "none"}`,
+      `Skipped: ${skipped.join(", ") || "none"}`,
+    ].join("\n"),
+    "Recovery complete",
+  );
+  outro("Done.");
+
+  return true;
+}
+
+async function recoverGithubRelease({
+  cwd,
+  config,
+  repository,
+  release,
+  recovered,
+  skipped,
+}: {
+  cwd: string;
+  config: ReconConfig;
+  repository: ReturnType<typeof parseGitHubRemote>;
+  release: RecoverableRelease;
+  recovered: string[];
+  skipped: string[];
+}): Promise<void> {
+  const githubRelease = config.github.release;
+  const token = resolveGithubTokenFromConfig(githubRelease);
+  const githubPlan = resolveGithubReleasePlan(githubRelease, {
+    token,
+    repository,
+  });
+
+  if (githubPlan.action === "skip") {
+    skipped.push(`GitHub Release (${githubPlan.reason})`);
+    return;
+  }
+
+  if (githubPlan.action === "error") {
+    throw new Error(githubPlan.reason);
+  }
+
+  if (token === null || repository === null) {
+    throw new Error("GitHub Release requirements were not resolved.");
+  }
+
+  const releaseStatus = await resolveGithubReleaseExists({
+    cwd,
+    config,
+    repository,
+    tag: release.tag,
+  });
+
+  if (releaseStatus.exists) {
+    skipped.push("GitHub Release already exists");
+    return;
+  }
+
+  const checkedConfig = await ensureGithubReleaseAccess({
+    cwd,
+    config: releaseStatus.config,
+    repository,
+    tag: release.tag,
+  });
+  const checkedToken = resolveGithubTokenFromConfig(
+    checkedConfig.github.release,
+  );
+
+  if (checkedToken === null) {
+    throw new Error("GitHub Release requirements were not resolved.");
+  }
+
+  await createGithubRelease({
+    repository,
+    token: checkedToken,
+    tag: release.tag,
+    notes: await readRecoveryReleaseNotes(cwd, release.version),
+    prerelease: release.isPrerelease,
+  });
+
+  recovered.push("GitHub Release");
+}
+
+async function recoverNpmPublish({
+  cwd,
+  config,
+  release,
+  recovered,
+  skipped,
+}: {
+  cwd: string;
+  config: ReconConfig;
+  release: RecoverableRelease;
+  recovered: string[];
+  skipped: string[];
+}): Promise<ReconConfig> {
+  const npmToken = resolveNpmTokenFromConfig(config.npm.publish);
+  const npmPlan = resolveNpmPublishPlan(config.npm.publish, {
+    token: npmToken,
+  });
+
+  if (npmPlan.action === "skip") {
+    skipped.push(`npm publish (${npmPlan.reason})`);
+    return config;
+  }
+
+  if (npmPlan.action === "error") {
+    throw new Error(npmPlan.reason);
+  }
+
+  const packageName = await readPackageName(cwd);
+  const distTag = resolveNpmRecoveryDistTag(config, release.version);
+  const publishStatus = await resolveNpmPackageVersionPublished({
+    cwd,
+    config,
+    packageName,
+    version: release.version,
+  });
+
+  if (publishStatus.isPublished) {
+    skipped.push("npm package already published");
+    return config;
+  }
+
+  const checkedConfig = await ensureNpmPublishAccess({
+    cwd,
+    config: publishStatus.config,
+    distTag,
+    packageName,
+    version: release.version,
+  });
+
+  await preflightNpmPackage({
+    cwd,
+    config: checkedConfig.npm.publish,
+    distTag,
+  });
+
+  await publishToNpm({
+    cwd,
+    config: checkedConfig.npm.publish,
+    distTag,
+  });
+
+  recovered.push(`npm publish (${distTag})`);
+
+  return checkedConfig;
+}
+
+async function resolveGithubReleaseExists({
+  cwd,
+  config,
+  repository,
+  tag,
+}: {
+  cwd: string;
+  config: ReconConfig;
+  repository: NonNullable<ReturnType<typeof parseGitHubRemote>>;
+  tag: string;
+}): Promise<{ config: ReconConfig; exists: boolean }> {
+  let currentConfig = config;
+
+  for (;;) {
+    const token = resolveGithubTokenFromConfig(currentConfig.github.release);
+
+    if (token === null) {
+      throw new Error("GitHub token not found.");
+    }
+
+    try {
+      return {
+        config: currentConfig,
+        exists: await hasGithubReleaseForTag({
+          repository,
+          token,
+          tag,
+        }),
+      };
+    } catch (error) {
+      if (!isCredentialError(error)) {
+        throw error;
+      }
+
+      const updatedConfig = await promptReplacementGithubToken(
+        cwd,
+        currentConfig,
+        error,
+      );
+
+      if (updatedConfig === null) {
+        throw new Error("GitHub Release access check cancelled.");
+      }
+
+      currentConfig = updatedConfig;
+    }
+  }
+}
+
+async function resolveNpmPackageVersionPublished({
+  cwd,
+  config,
+  packageName,
+  version,
+}: {
+  cwd: string;
+  config: ReconConfig;
+  packageName: string;
+  version: string;
+}): Promise<{ config: ReconConfig; isPublished: boolean }> {
+  let currentConfig = config;
+
+  for (;;) {
+    try {
+      return {
+        config: currentConfig,
+        isPublished: await isNpmPackageVersionPublished(
+          cwd,
+          currentConfig.npm.publish,
+          packageName,
+          version,
+        ),
+      };
+    } catch (error) {
+      if (!isCredentialError(error)) {
+        throw error;
+      }
+
+      const updatedConfig = await promptReplacementNpmToken(
+        cwd,
+        currentConfig,
+        error,
+      );
+
+      if (updatedConfig === null) {
+        throw new Error("npm publish access check cancelled.");
+      }
+
+      currentConfig = updatedConfig;
+    }
+  }
+}
+
+interface RecoverableRelease {
+  version: string;
+  tag: string;
+  isPrerelease: boolean;
+}
+
+async function getRecoverableRelease(
+  cwd: string,
+  gitContext: ReturnType<typeof getGitContext>,
+): Promise<RecoverableRelease | null> {
+  if (gitContext.latestTag === null) return null;
+
+  const version = await readPackageVersion(cwd);
+
+  if (version !== gitContext.latestTag) return null;
+  if (!isTagAtHead(cwd, gitContext.latestTag)) return null;
+  if (getLatestCommitSubject(cwd) !== `chore(release): ${version}`) {
+    return null;
+  }
+
+  return {
+    version,
+    tag: gitContext.latestTag,
+    isPrerelease: version.includes("-"),
+  };
 }
 
 async function commitStagedFiles(
@@ -886,6 +1329,227 @@ async function promptMissingNpmToken(
   return updatedConfig;
 }
 
+async function ensureGithubReleaseAccess({
+  cwd,
+  config,
+  repository,
+  tag,
+}: {
+  cwd: string;
+  config: ReconConfig;
+  repository: NonNullable<ReturnType<typeof parseGitHubRemote>>;
+  tag: string;
+}): Promise<ReconConfig> {
+  let currentConfig = config;
+
+  for (;;) {
+    const token = resolveGithubTokenFromConfig(currentConfig.github.release);
+
+    if (token === null) {
+      throw new Error("GitHub token not found.");
+    }
+
+    try {
+      await preflightGithubReleaseAccess({
+        repository,
+        token,
+        tag,
+      });
+
+      note(
+        [
+          `Repository: ${repository.owner}/${repository.repo}`,
+          `Tag: ${tag}`,
+          "Status: access verified",
+        ].join("\n"),
+        "Checking GitHub Release access",
+      );
+
+      return currentConfig;
+    } catch (error) {
+      if (!isCredentialError(error)) {
+        throw error;
+      }
+
+      const updatedConfig = await promptReplacementGithubToken(
+        cwd,
+        currentConfig,
+        error,
+      );
+
+      if (updatedConfig === null) {
+        throw new Error("GitHub Release access check cancelled.");
+      }
+
+      currentConfig = updatedConfig;
+    }
+  }
+}
+
+async function ensureNpmPublishAccess({
+  cwd,
+  config,
+  distTag,
+  packageName,
+  version,
+}: {
+  cwd: string;
+  config: ReconConfig;
+  distTag: string;
+  packageName: string;
+  version: string;
+}): Promise<ReconConfig> {
+  let currentConfig = config;
+
+  for (;;) {
+    try {
+      await preflightNpmPublish({
+        cwd,
+        config: currentConfig.npm.publish,
+        distTag,
+        packageName,
+        version,
+      });
+
+      return currentConfig;
+    } catch (error) {
+      if (!isCredentialError(error)) {
+        throw error;
+      }
+
+      const updatedConfig = await promptReplacementNpmToken(
+        cwd,
+        currentConfig,
+        error,
+      );
+
+      if (updatedConfig === null) {
+        throw new Error("npm publish access check cancelled.");
+      }
+
+      currentConfig = updatedConfig;
+    }
+  }
+}
+
+async function promptReplacementGithubToken(
+  cwd: string,
+  config: ReconConfig,
+  error: unknown,
+): Promise<ReconConfig | null> {
+  note(formatErrorMessage(error), "GitHub Release access failed");
+
+  const tokenAction = await select<"input" | "cancel">({
+    message: "How do you want to continue?",
+    initialValue: "input",
+    options: [
+      {
+        value: "input",
+        label: "Input GitHub token",
+        hint: "save token to recon.json, then retry access check",
+      },
+      {
+        value: "cancel",
+        label: "Cancel publish",
+        hint: "no files, commits, tags, or pushes are created",
+      },
+    ],
+  });
+
+  if (isCancel(tokenAction) || tokenAction === "cancel") {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  await ensureReconConfigIgnored(cwd);
+
+  if (isGitTracked(cwd, "recon.json")) {
+    throw new Error(
+      "Cannot save GITHUB_TOKEN because recon.json is tracked by Git. Run `git rm --cached recon.json`, then rerun `recon publish`.",
+    );
+  }
+
+  const token = await password({
+    message: "Enter GitHub token (Fine-grained PAT, Contents: Read and write)",
+    validate(value) {
+      if (!value || value.trim().length === 0) {
+        return "GitHub token is required.";
+      }
+    },
+  });
+
+  if (isCancel(token)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  const updatedConfig = withGithubReleaseToken(config, token);
+
+  await writeReconConfig(cwd, updatedConfig);
+  log.success("GITHUB_TOKEN saved in recon.json.");
+
+  return updatedConfig;
+}
+
+async function promptReplacementNpmToken(
+  cwd: string,
+  config: ReconConfig,
+  error: unknown,
+): Promise<ReconConfig | null> {
+  note(formatErrorMessage(error), "npm publish access failed");
+
+  const tokenAction = await select<"input" | "cancel">({
+    message: "How do you want to continue?",
+    initialValue: "input",
+    options: [
+      {
+        value: "input",
+        label: "Input npm token",
+        hint: "save token to recon.json, then retry access check",
+      },
+      {
+        value: "cancel",
+        label: "Cancel publish",
+        hint: "no files, commits, tags, or pushes are created",
+      },
+    ],
+  });
+
+  if (isCancel(tokenAction) || tokenAction === "cancel") {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  await ensureReconConfigIgnored(cwd);
+
+  if (isGitTracked(cwd, "recon.json")) {
+    throw new Error(
+      "Cannot save NPM_TOKEN because recon.json is tracked by Git. Run `git rm --cached recon.json`, then rerun `recon publish`.",
+    );
+  }
+
+  const token = await password({
+    message: "Enter npm token (Automation token recommended)",
+    validate(value) {
+      if (!value || value.trim().length === 0) {
+        return "NPM_TOKEN is required.";
+      }
+    },
+  });
+
+  if (isCancel(token)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  const updatedConfig = withNpmPublishToken(config, token);
+
+  await writeReconConfig(cwd, updatedConfig);
+  log.success("NPM_TOKEN saved in recon.json.");
+
+  return updatedConfig;
+}
+
 async function promptReleaseSelection(
   config: ReconConfig,
   stableVersion: string,
@@ -1074,6 +1738,43 @@ function resolveNpmDistTag(
   return distTag;
 }
 
+function resolveNpmRecoveryDistTag(
+  config: ReconConfig,
+  version: string,
+): string {
+  const prereleaseIdentifier = getPrereleaseIdentifier(version);
+
+  if (prereleaseIdentifier === null) {
+    return config.npm.publish.tag;
+  }
+
+  const channel = config.github.release.prerelease.channels.find(
+    (item) => item.identifier === prereleaseIdentifier,
+  );
+  const distTag = channel?.name ?? prereleaseIdentifier;
+
+  if (!isValidNpmDistTag(distTag)) {
+    throw new Error(`Invalid npm dist-tag: ${distTag}`);
+  }
+
+  return distTag;
+}
+
+function getPrereleaseIdentifier(version: string): string | null {
+  const match = /^\d+\.\d+\.\d+-(?<prerelease>[0-9A-Za-z.-]+)$/.exec(version);
+
+  if (!match?.groups) return null;
+
+  const parts = match.groups.prerelease.split(".");
+  const lastPart = parts.at(-1);
+
+  if (lastPart !== undefined && /^\d+$/.test(lastPart) && parts.length > 1) {
+    return parts.slice(0, -1).join(".");
+  }
+
+  return match.groups.prerelease;
+}
+
 function getPublishTargetChoice(targets: PublishTarget[]): PublishTargetChoice {
   if (targets.includes("github") && targets.includes("npm")) return "all";
   if (targets.includes("npm")) return "npm";
@@ -1091,6 +1792,22 @@ function formatPublishTargets(targets: PublishTarget[]): string {
 
 function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isCredentialError(error: unknown): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("token") ||
+    message.includes("e401") ||
+    message.includes("e403") ||
+    message.includes("(401)") ||
+    message.includes("(403)") ||
+    message.includes("unauthorized") ||
+    message.includes("forbidden") ||
+    message.includes("permission") ||
+    message.includes("access")
+  );
 }
 
 function getReleaseCommits(
@@ -1214,6 +1931,38 @@ async function readOptionalTextFile(filePath: string): Promise<string> {
   } catch {
     return "";
   }
+}
+
+async function readRecoveryReleaseNotes(
+  cwd: string,
+  version: string,
+): Promise<string> {
+  const changelog = await readOptionalTextFile(join(cwd, "CHANGELOG.md"));
+  const releaseLines = getChangelogReleaseSection(changelog, version);
+
+  if (releaseLines.length === 0) {
+    return `Release ${version}\n`;
+  }
+
+  return `${releaseLines.join("\n").trim()}\n`;
+}
+
+function getChangelogReleaseSection(
+  content: string,
+  version: string,
+): string[] {
+  const lines = content.split(/\r?\n/);
+  const startIndex = lines.findIndex((line) =>
+    line.startsWith(`## [${version}]`),
+  );
+
+  if (startIndex === -1) return [];
+
+  const endIndex = lines.findIndex(
+    (line, index) => index > startIndex && line.startsWith("## ["),
+  );
+
+  return lines.slice(startIndex, endIndex === -1 ? undefined : endIndex);
 }
 
 function formatDate(date: Date): string {
