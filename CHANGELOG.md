@@ -5,7 +5,6 @@
 ### Features
 
 - include commit body and footer in release notes
-
   - Parse Conventional Commit body and footer alongside the header
   - Render body and footer under each changelog item with Prettier-compatible Markdown spacing
   - Document that changelog generation now includes body and footer details

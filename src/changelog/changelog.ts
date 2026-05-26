@@ -81,7 +81,9 @@ function formatCommitChangelogEntry(commit: ConventionalCommit): string[] {
 
   if (details.length === 0) return lines;
 
-  lines.push("");
+  if (!startsWithMarkdownList(details[0])) {
+    lines.push("");
+  }
 
   for (const [index, detail] of details.entries()) {
     lines.push(...indentMarkdownBlock(detail));
@@ -96,6 +98,12 @@ function formatCommitChangelogEntry(commit: ConventionalCommit): string[] {
 
 function indentMarkdownBlock(value: string): string[] {
   return value.split(/\r?\n/).map((line) => (line ? `  ${line}` : ""));
+}
+
+function startsWithMarkdownList(value: string): boolean {
+  const firstLine = value.split(/\r?\n/).find((line) => line.trim().length > 0);
+
+  return firstLine ? /^(?:[-*+]|\d+\.)\s+/.test(firstLine.trimStart()) : false;
 }
 
 export function prependReleaseChangelog(
