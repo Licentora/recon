@@ -171,7 +171,8 @@ Then it:
    - use detected commits only; or
    - create an additional commit from selected unstaged files.
      The file picker includes `Select all` for large unstaged file sets.
-4. Asks whether to publish a stable release or prerelease.
+4. Asks whether to publish the selected targets as a stable release or
+   prerelease.
 5. Updates `package.json` and the package-manager lockfile.
 6. Prepends `CHANGELOG.md`.
 7. Creates a release commit.
@@ -233,7 +234,14 @@ config file. During publish, the token is written only to that temporary file an
 removed after the npm command exits.
 
 Stable npm releases use the configured dist-tag, defaulting to `latest`.
-Prereleases use the selected prerelease channel as the dist-tag, for example:
+Prereleases use the same release/prerelease choice as GitHub Releases. If
+`All` is selected and the user chooses `Prerelease`, recon publishes:
+
+- a SemVer prerelease version such as `1.3.0-beta.0`
+- a GitHub prerelease
+- an npm package using the selected channel as the dist-tag
+
+Default prerelease dist-tags are:
 
 - `alpha`
 - `beta`

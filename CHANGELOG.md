@@ -81,7 +81,7 @@ ensuring proper spacing and indentation for different markdown block types
 
 - enhance commit process with message prompt and streamline git commit handling
 
-## [1.0.0] - 2026-05-26
+## [1.0.0] - 2026-05-26 [(be3e8ba)](https://github.com/Licentora/recon/commit/be3e8ba2f4b3489c0f558e9608edb143576f0afc)
 
 ### Added
 

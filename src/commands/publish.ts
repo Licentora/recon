@@ -193,8 +193,10 @@ export async function runPublish({
       [
         `Current version: ${currentVersion}`,
         `Release type: ${releaseType}`,
+        `Selected targets: ${formatPublishTargets(config.publish.targets)}`,
         `Stable preview: ${stablePreview.version}`,
         `Prerelease preview: ${prereleasePreview.version}`,
+        `Prerelease channel: ${defaultPrereleaseChannel.name}`,
         `GitHub Release: ${formatGithubDryRunPlan(githubDryRunPlan)}`,
         `npm publish: ${formatNpmPublishPlan(npmPlan)}`,
       ].join("\n"),
@@ -257,6 +259,16 @@ export async function runPublish({
   if (npmPlan.action === "skip") {
     note(npmPlan.reason, "npm publish skipped");
   }
+
+  note(
+    formatReleaseModeSummary(config, selection, nextVersion, {
+      githubAction: githubPlan.action,
+      npmAction: npmPlan.action,
+      npmDistTag,
+      isPrerelease: resolvedVersion.isPrerelease,
+    }),
+    "Release mode",
+  );
 
   let npmPackageName: string | null = null;
 
@@ -456,9 +468,11 @@ export async function runPublish({
 
   note(
     [
+      `Mode: ${resolvedVersion.isPrerelease ? "prerelease" : "release"}`,
       `Version: ${nextVersion}`,
       `Tag: ${tag}`,
-      `Targets: ${config.publish.targets.join(", ") || "git only"}`,
+      `Targets: ${formatPublishTargets(config.publish.targets)}`,
+      ...(npmDistTag === null ? [] : [`npm dist-tag: ${npmDistTag}`]),
     ].join("\n"),
     "Published release",
   );
@@ -785,18 +799,18 @@ async function promptReleaseSelection(
   prereleaseVersion: string,
 ): Promise<ReleaseSelection | null> {
   const releaseKind = await select<"stable" | "prerelease">({
-    message: "Publish as release or prerelease?",
+    message: "Publish selected targets as release or prerelease?",
     initialValue: "stable",
     options: [
       {
         value: "stable",
         label: "Release",
-        hint: stableVersion,
+        hint: `${stableVersion} for selected targets`,
       },
       {
         value: "prerelease",
         label: "Prerelease",
-        hint: prereleaseVersion,
+        hint: `${prereleaseVersion} for selected targets`,
       },
     ],
   });
@@ -894,6 +908,63 @@ function formatNpmPublishPlan(
   return `${plan.action} (${plan.reason})`;
 }
 
+function formatReleaseModeSummary(
+  config: ReconConfig,
+  selection: ReleaseSelection,
+  nextVersion: string,
+  options: {
+    githubAction: "create" | "skip" | "error";
+    npmAction: "publish" | "skip" | "error";
+    npmDistTag: string | null;
+    isPrerelease: boolean;
+  },
+): string {
+  const lines = [
+    `Mode: ${options.isPrerelease ? "prerelease" : "release"}`,
+    `Version: ${nextVersion}`,
+    `Selected targets: ${formatPublishTargets(config.publish.targets)}`,
+  ];
+
+  if (selection.kind === "prerelease") {
+    lines.push(`Channel: ${selection.channel.name}`);
+    lines.push(`SemVer identifier: ${selection.channel.identifier}`);
+  }
+
+  if (config.publish.targets.includes("github")) {
+    lines.push(
+      `GitHub Release: ${formatGithubReleaseMode(options.githubAction, options.isPrerelease)}`,
+    );
+  }
+
+  if (config.publish.targets.includes("npm")) {
+    lines.push(`npm publish: ${formatNpmPublishMode(options)}`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatGithubReleaseMode(
+  action: "create" | "skip" | "error",
+  isPrerelease: boolean,
+): string {
+  if (action === "create") {
+    return isPrerelease ? "prerelease" : "release";
+  }
+
+  return action;
+}
+
+function formatNpmPublishMode(options: {
+  npmAction: "publish" | "skip" | "error";
+  npmDistTag: string | null;
+}): string {
+  if (options.npmAction === "publish" && options.npmDistTag !== null) {
+    return `dist-tag ${options.npmDistTag}`;
+  }
+
+  return options.npmAction;
+}
+
 function resolveNpmDistTag(
   config: ReconConfig,
   selection: ReleaseSelection,
@@ -915,6 +986,14 @@ function getPublishTargetChoice(targets: PublishTarget[]): PublishTargetChoice {
   if (targets.includes("npm")) return "npm";
 
   return "github";
+}
+
+function formatPublishTargets(targets: PublishTarget[]): string {
+  if (targets.length === 0) return "git only";
+
+  return targets
+    .map((target) => (target === "github" ? "GitHub" : "npm"))
+    .join(", ");
 }
 
 function formatErrorMessage(error: unknown): string {

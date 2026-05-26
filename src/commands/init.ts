@@ -527,8 +527,7 @@ async function maybeCreateHistoricalChangelog(
   );
 
   const shouldCreateChangelog = await confirm({
-    message:
-      "Create a professional English CHANGELOG.md from all existing Conventional Commit history?",
+    message: "Generate CHANGELOG.md from existing Conventional Commit history?",
     initialValue: !hasExistingChangelog,
   });
 
