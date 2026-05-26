@@ -81,12 +81,19 @@ function formatCommitChangelogEntry(commit: ConventionalCommit): string[] {
 
   if (details.length === 0) return lines;
 
-  if (!startsWithMarkdownList(details[0])) {
-    lines.push("");
-  }
-
   for (const [index, detail] of details.entries()) {
-    lines.push(...indentMarkdownBlock(detail));
+    const blocks = splitMarkdownBlocks(detail);
+
+    for (const [blockIndex, block] of blocks.entries()) {
+      const isFirstDetailBlock = index === 0 && blockIndex === 0;
+      const isListBlock = startsWithMarkdownList(block);
+
+      if (!isFirstDetailBlock || !isListBlock) {
+        lines.push("");
+      }
+
+      lines.push(...formatDetailBlock(block, isListBlock));
+    }
 
     if (index < details.length - 1) {
       lines.push("");
@@ -96,8 +103,17 @@ function formatCommitChangelogEntry(commit: ConventionalCommit): string[] {
   return lines;
 }
 
-function indentMarkdownBlock(value: string): string[] {
+function formatDetailBlock(value: string, isListBlock: boolean): string[] {
+  if (!isListBlock) return value.split(/\r?\n/);
+
   return value.split(/\r?\n/).map((line) => (line ? `  ${line}` : ""));
+}
+
+function splitMarkdownBlocks(value: string): string[] {
+  return value
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
 }
 
 function startsWithMarkdownList(value: string): boolean {
