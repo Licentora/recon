@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from "node:fs";
-import { cancel, log } from "@clack/prompts";
+import { cancel, note } from "@clack/prompts";
 
 import { parseCliArgs } from "./cli-args.js";
 import { runInit } from "./commands/init.js";
@@ -63,6 +63,6 @@ Usage:
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
 
-  log.error(message);
+  note(message, "Error");
   process.exitCode = 1;
 });

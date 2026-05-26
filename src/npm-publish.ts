@@ -1,8 +1,8 @@
-import { execFileSync } from "node:child_process";
 import { rm, writeFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { runCommandQuiet } from "./command.js";
 import type { NpmPublishConfig, ReconConfig } from "./config.js";
 import { getExecutableInvocation } from "./package-manager.js";
 
@@ -106,12 +106,13 @@ export async function publishToNpm({
       "publish",
       "--access",
       config.access,
+      "--tag",
+      distTag,
     ]);
 
-    execFileSync(command.command, command.args, {
+    runCommandQuiet(command.command, command.args, {
       cwd,
       env: createNpmEnv(userConfigPath),
-      stdio: "inherit",
     });
   });
 }
@@ -179,7 +180,6 @@ export function createNpmrcContent(
     `registry=${config.registry}`,
     `tag=${distTag}`,
     `${getRegistryAuthPrefix(config.registry)}:_authToken=${token}`,
-    "always-auth=true",
     "",
   ].join("\n");
 }
@@ -196,10 +196,9 @@ export function getRegistryAuthPrefix(registry: string): string {
 function runNpm(args: string[], cwd: string, userConfigPath: string): void {
   const command = getExecutableInvocation("npm", args);
 
-  execFileSync(command.command, command.args, {
+  runCommandQuiet(command.command, command.args, {
     cwd,
     env: createNpmEnv(userConfigPath),
-    stdio: "pipe",
   });
 }
 
@@ -207,6 +206,9 @@ function createNpmEnv(userConfigPath: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     NPM_CONFIG_USERCONFIG: userConfigPath,
+    NPM_CONFIG_AUDIT: "false",
+    NPM_CONFIG_FUND: "false",
+    NPM_CONFIG_LOGLEVEL: "error",
   };
 }
 
@@ -220,21 +222,13 @@ function validatePackageNameForPublish(packageName: string): void {
 }
 
 function isExpectedNpmNotFound(error: unknown): boolean {
-  if (!isExecError(error)) return false;
+  if (!(error instanceof Error)) return false;
 
-  const stderr = error.stderr?.toString("utf8") ?? "";
-  const stdout = error.stdout?.toString("utf8") ?? "";
-  const output = `${stdout}\n${stderr}`;
+  const output = error.message;
 
   return (
     output.includes("E404") ||
     output.includes("404 Not Found") ||
     output.includes("is not in this registry")
   );
-}
-
-function isExecError(
-  error: unknown,
-): error is Error & { stderr?: Buffer; stdout?: Buffer } {
-  return error instanceof Error;
 }

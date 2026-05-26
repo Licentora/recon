@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { runCommandQuiet } from "./command.js";
 
 export interface GitStatus {
   staged: string[];
@@ -78,9 +78,7 @@ export function stageReleaseFiles(cwd: string, files: string[]): void {
 }
 
 export function commitWithMessage(cwd: string, message: string): void {
-  runGit(["commit", "-m", message], cwd, {
-    stdio: "inherit",
-  });
+  runGit(["commit", "-m", message], cwd);
 }
 
 export function getLatestCommitSummary(cwd: string): string {
@@ -88,15 +86,11 @@ export function getLatestCommitSummary(cwd: string): string {
 }
 
 export function commitRelease(cwd: string, version: string): void {
-  runGit(["commit", "-m", `chore(release): ${version}`], cwd, {
-    stdio: "inherit",
-  });
+  runGit(["commit", "-m", `chore(release): ${version}`], cwd);
 }
 
 export function createReleaseTag(cwd: string, version: string): void {
-  runGit(["tag", "-a", version, "-m", `Release ${version}`], cwd, {
-    stdio: "inherit",
-  });
+  runGit(["tag", "-a", version, "-m", `Release ${version}`], cwd);
 }
 
 export function pushRelease(
@@ -105,8 +99,8 @@ export function pushRelease(
   branch: string,
   tag: string,
 ): void {
-  runGit(["push", remote, branch], cwd, { stdio: "inherit" });
-  runGit(["push", remote, `refs/tags/${tag}`], cwd, { stdio: "inherit" });
+  runGit(["push", remote, branch], cwd);
+  runGit(["push", remote, `refs/tags/${tag}`], cwd);
 }
 
 export function getCommitMessagesSinceLatestTag(cwd: string): string[] {
@@ -199,19 +193,9 @@ function hasCommitHistory(cwd: string): boolean {
   }
 }
 
-function runGit(
-  args: string[],
-  cwd: string,
-  options: { stdio?: "pipe" | "inherit" } = {},
-): string {
+function runGit(args: string[], cwd: string): string {
   try {
-    const result = execFileSync("git", args, {
-      cwd,
-      encoding: options.stdio === "inherit" ? undefined : "utf8",
-      stdio: options.stdio ?? "pipe",
-    });
-
-    return typeof result === "string" ? result : "";
+    return runCommandQuiet("git", args, { cwd });
   } catch (error) {
     if (error instanceof Error) {
       throw error;

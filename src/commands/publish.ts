@@ -250,30 +250,52 @@ export async function runPublish({
   }
 
   if (githubPlan.action === "skip") {
-    log.warn(githubPlan.reason);
+    note(githubPlan.reason, "GitHub Release skipped");
   }
 
   if (npmPlan.action === "skip") {
-    log.warn(npmPlan.reason);
+    note(npmPlan.reason, "npm publish skipped");
   }
 
-  if (npmPlan.action === "publish" && npmDistTag !== null) {
-    const packageName = await readPackageName(cwd);
+  let npmPackageName: string | null = null;
 
-    log.step("Checking npm publish access");
+  if (npmPlan.action === "publish" && npmDistTag !== null) {
+    npmPackageName = await readPackageName(cwd);
+
     await preflightNpmPublish({
       cwd,
       config: config.npm.publish,
       distTag: npmDistTag,
-      packageName,
+      packageName: npmPackageName,
       version: nextVersion,
     });
+
+    note(
+      [
+        `Package: ${npmPackageName}`,
+        `Version: ${nextVersion}`,
+        `Registry: ${config.npm.publish.registry}`,
+        `dist-tag: ${npmDistTag}`,
+        "Status: access verified",
+      ].join("\n"),
+      "npm publish access",
+    );
   }
 
-  log.step(`Preparing release ${nextVersion}`);
-
   await updatePackageJsonFileVersion(cwd, nextVersion);
-  updateLockfile(cwd, config.packageManager);
+
+  try {
+    updateLockfile(cwd, config.packageManager);
+  } catch (error) {
+    throw new Error(
+      [
+        formatErrorMessage(error),
+        `package.json was already updated to ${nextVersion}.`,
+        "Release commit, tag, push, npm publish, and GitHub Release were not created yet.",
+        "Fix the package manager error, then rerun `recon publish` or restore package.json before retrying.",
+      ].join("\n"),
+    );
+  }
 
   const hasVisibleChangelog = releaseContent.length > 0;
 
@@ -292,14 +314,71 @@ export async function runPublish({
     hasVisibleChangelog,
   );
 
-  stageReleaseFiles(cwd, releaseFiles);
-  commitRelease(cwd, nextVersion);
-  note(getLatestCommitSummary(cwd), "Release commit");
-  createReleaseTag(cwd, nextVersion);
-  pushRelease(cwd, gitContext.remote.name, gitContext.branch, tag);
+  note(
+    [
+      `Version: ${currentVersion} -> ${nextVersion}`,
+      `Lockfile: updated for ${config.packageManager}`,
+      `CHANGELOG.md: ${hasVisibleChangelog ? "updated" : "skipped"}`,
+      `Release files: ${releaseFiles.join(", ")}`,
+    ].join("\n"),
+    "Prepared release",
+  );
+
+  try {
+    stageReleaseFiles(cwd, releaseFiles);
+    commitRelease(cwd, nextVersion);
+  } catch (error) {
+    throw new Error(
+      [
+        formatErrorMessage(error),
+        "Release files may already be staged, but the release commit was not created.",
+        "Fix the Git commit error, then rerun `recon publish` or restore the release file changes before retrying.",
+      ].join("\n"),
+    );
+  }
+
+  const releaseCommitSummary = getLatestCommitSummary(cwd);
+
+  note(releaseCommitSummary, "Release commit");
+
+  try {
+    createReleaseTag(cwd, nextVersion);
+  } catch (error) {
+    throw new Error(
+      [
+        formatErrorMessage(error),
+        `Release commit was already created: ${releaseCommitSummary}.`,
+        "Fix the Git tag error, then create the tag manually or remove the release commit before retrying.",
+      ].join("\n"),
+    );
+  }
+
+  try {
+    pushRelease(cwd, gitContext.remote.name, gitContext.branch, tag);
+  } catch (error) {
+    throw new Error(
+      [
+        formatErrorMessage(error),
+        `Release commit and tag already exist locally for ${tag}.`,
+        `After fixing Git remote or authentication, push manually with \`git push ${gitContext.remote.name} ${gitContext.branch}\` and \`git push ${gitContext.remote.name} refs/tags/${tag}\`.`,
+      ].join("\n"),
+    );
+  }
+
+  note(
+    [
+      `Branch: ${gitContext.branch}`,
+      `Remote: ${gitContext.remote.name}`,
+      `Tag: ${tag}`,
+    ].join("\n"),
+    "Pushed to Git",
+  );
 
   if (npmPlan.action === "publish" && npmDistTag !== null) {
-    log.step(`Publishing to npm with dist-tag ${npmDistTag}`);
+    if (npmPackageName === null) {
+      throw new Error("npm package name was not resolved.");
+    }
+
     try {
       await publishToNpm({
         cwd,
@@ -315,6 +394,16 @@ export async function runPublish({
         ].join("\n"),
       );
     }
+
+    note(
+      [
+        `Package: ${npmPackageName}`,
+        `Version: ${nextVersion}`,
+        `Registry: ${config.npm.publish.registry}`,
+        `dist-tag: ${npmDistTag}`,
+      ].join("\n"),
+      "Published to npm",
+    );
   }
 
   if (githubPlan.action === "create") {
@@ -339,10 +428,26 @@ export async function runPublish({
         ].join("\n"),
       );
     }
+
+    note(
+      [
+        `Repository: ${githubRepository.owner}/${githubRepository.repo}`,
+        `Tag: ${tag}`,
+        `Prerelease: ${resolvedVersion.isPrerelease ? "yes" : "no"}`,
+      ].join("\n"),
+      "Created GitHub Release",
+    );
   }
 
-  log.success(`Published ${nextVersion}`);
-  outro(`Release ${nextVersion} published.`);
+  note(
+    [
+      `Version: ${nextVersion}`,
+      `Tag: ${tag}`,
+      `Targets: ${config.publish.targets.join(", ") || "git only"}`,
+    ].join("\n"),
+    "Published release",
+  );
+  outro("Done.");
 }
 
 async function prepareCommitFlow(

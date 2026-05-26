@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { runCommandQuiet } from "./command.js";
 import type { PackageManager } from "./config.js";
 
 export interface CommandSpec {
@@ -15,14 +15,20 @@ export function getLockfileUpdateCommand(
   if (packageManager === "npm") {
     return {
       command: "npm",
-      args: ["install", "--package-lock-only"],
+      args: [
+        "install",
+        "--package-lock-only",
+        "--ignore-scripts",
+        "--no-audit",
+        "--fund=false",
+      ],
     };
   }
 
   if (packageManager === "pnpm") {
     return {
       command: "pnpm",
-      args: ["install", "--lockfile-only"],
+      args: ["install", "--lockfile-only", "--ignore-scripts"],
     };
   }
 
@@ -39,9 +45,8 @@ export function updateLockfile(
   const { command, args } = getLockfileUpdateCommand(packageManager);
   const executable = getExecutableInvocation(command, args);
 
-  execFileSync(executable.command, executable.args, {
+  runCommandQuiet(executable.command, executable.args, {
     cwd,
-    stdio: "inherit",
   });
 }
 
