@@ -1,6 +1,6 @@
 {
   "name": "@licentora/recon",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Automated release management CLI for Node.js packages. Parses Conventional Commits to determine semantic versioning, generates changelogs, manages Git workflows, and publishes to GitHub Releases and npm with built-in dry-run mode and interactive configuration.",
   "type": "module",
   "bin": {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.6.0] - 2026-05-27 [(f786316)](https://github.com/Licentora/recon/commit/f7863164a96002189d690a14e108a844a99e30fe)
+
+### Features
+
+- enhance publish flow with hidden commit handling and error classification
+
 ## [1.5.1] - 2026-05-26 [(e7a1ca5)](https://github.com/Licentora/recon/commit/e7a1ca524e8f75deeae6b991545717a6f76ca7a4)
 
 ### Bug Fixes
