@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.3] - 2026-05-26 [(374359c)](https://github.com/Licentora/recon/commit/374359c454efae1ac7f95edf8620ad741f14e0bc)
+
+### Bug Fixes
+
+- improve markdown block formatting and list detection
+  - Extract splitMarkdownBlocks function to split detail text by blank lines
+  - Rename indentMarkdownBlock to formatDetailBlock with list awareness
+  - Refactor formatCommitChangelogEntry to process markdown blocks individually
+  - Enhance blank line insertion logic based on block type (list vs. regular)
+  - Improve handling of consecutive detail blocks with proper spacing
+
+This refactoring provides more granular control over changelog formatting,
+ensuring proper spacing and indentation for different markdown block types
+(lists, paragraphs, etc.) while maintaining consistency across commit entries.
+
 ## [1.4.2] - 2026-05-26 [(8afe4e8)](https://github.com/Licentora/recon/commit/8afe4e87273ca52145b0f0280c4c588682c868cd)
 
 ### Bug Fixes
