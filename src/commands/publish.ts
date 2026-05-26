@@ -17,8 +17,16 @@ import {
   generateReleaseChangelog,
   prependReleaseChangelog,
 } from "../changelog/changelog.js";
-import type { PrereleaseChannel, ReconConfig } from "../config.js";
-import { readReconConfig, writeReconConfig } from "../config.js";
+import type {
+  PrereleaseChannel,
+  PublishTarget,
+  ReconConfig,
+} from "../config.js";
+import {
+  isValidNpmDistTag,
+  readReconConfig,
+  writeReconConfig,
+} from "../config.js";
 import {
   buildGithubCommitUrl,
   createGithubRelease,
@@ -53,6 +61,16 @@ import {
 } from "../release/release-selection.js";
 import { getReleaseFilePaths, updateLockfile } from "../package-manager.js";
 import {
+  preflightNpmPublish,
+  publishToNpm,
+  resolveNpmPublishPlan,
+  resolveNpmTokenFromConfig,
+  shouldPromptForNpmToken,
+  withNpmPublishSkipped,
+  withNpmPublishToken,
+} from "../npm-publish.js";
+import {
+  readPackageName,
   readPackageVersion,
   updatePackageJsonFileVersion,
 } from "../package-json.js";
@@ -69,6 +87,8 @@ type ReleaseCommit = ConventionalCommit & {
   url: string | null;
 };
 
+type PublishTargetChoice = "all" | PublishTarget;
+
 export async function runPublish({
   cwd,
   dryRun,
@@ -76,16 +96,31 @@ export async function runPublish({
   intro(dryRun ? "recon publish --dry" : "recon publish");
 
   let config = await readReconConfig(cwd);
+  const selectedTargets = await promptPublishTargets(config.publish.targets);
 
-  const configAfterTokenPrompt = await promptMissingGithubToken(
+  if (selectedTargets === null) return;
+
+  config = applySelectedPublishTargets(config, selectedTargets);
+
+  const configAfterGithubTokenPrompt = await promptMissingGithubToken(
     cwd,
     config,
     dryRun,
   );
 
-  if (configAfterTokenPrompt === null) return;
+  if (configAfterGithubTokenPrompt === null) return;
 
-  config = configAfterTokenPrompt;
+  config = configAfterGithubTokenPrompt;
+
+  const configAfterNpmTokenPrompt = await promptMissingNpmToken(
+    cwd,
+    config,
+    dryRun,
+  );
+
+  if (configAfterNpmTokenPrompt === null) return;
+
+  config = configAfterNpmTokenPrompt;
 
   const currentVersion = await readPackageVersion(cwd);
   const gitContext = getGitContext(cwd);
@@ -141,6 +176,10 @@ export async function runPublish({
       token: githubToken,
       repository: githubRepository,
     });
+    const npmToken = resolveNpmTokenFromConfig(config.npm.publish);
+    const npmPlan = resolveNpmPublishPlan(config.npm.publish, {
+      token: npmToken,
+    });
     const changelogPreview = generateReleaseChangelog({
       version: stablePreview.version,
       date: formatDate(new Date()),
@@ -156,6 +195,7 @@ export async function runPublish({
         `Stable preview: ${stablePreview.version}`,
         `Prerelease preview: ${prereleasePreview.version}`,
         `GitHub Release: ${formatGithubDryRunPlan(githubDryRunPlan)}`,
+        `npm publish: ${formatNpmPublishPlan(npmPlan)}`,
       ].join("\n"),
       "Dry run",
     );
@@ -194,13 +234,40 @@ export async function runPublish({
     token: githubToken,
     repository: githubRepository,
   });
+  const npmToken = resolveNpmTokenFromConfig(config.npm.publish);
+  const npmPlan = resolveNpmPublishPlan(config.npm.publish, {
+    token: npmToken,
+  });
+  const npmDistTag =
+    npmPlan.action === "publish" ? resolveNpmDistTag(config, selection) : null;
 
   if (githubPlan.action === "error") {
     throw new Error(githubPlan.reason);
   }
 
+  if (npmPlan.action === "error") {
+    throw new Error(npmPlan.reason);
+  }
+
   if (githubPlan.action === "skip") {
     log.warn(githubPlan.reason);
+  }
+
+  if (npmPlan.action === "skip") {
+    log.warn(npmPlan.reason);
+  }
+
+  if (npmPlan.action === "publish" && npmDistTag !== null) {
+    const packageName = await readPackageName(cwd);
+
+    log.step("Checking npm publish access");
+    await preflightNpmPublish({
+      cwd,
+      config: config.npm.publish,
+      distTag: npmDistTag,
+      packageName,
+      version: nextVersion,
+    });
   }
 
   log.step(`Preparing release ${nextVersion}`);
@@ -231,18 +298,47 @@ export async function runPublish({
   createReleaseTag(cwd, nextVersion);
   pushRelease(cwd, gitContext.remote.name, gitContext.branch, tag);
 
+  if (npmPlan.action === "publish" && npmDistTag !== null) {
+    log.step(`Publishing to npm with dist-tag ${npmDistTag}`);
+    try {
+      await publishToNpm({
+        cwd,
+        config: config.npm.publish,
+        distTag: npmDistTag,
+      });
+    } catch (error) {
+      throw new Error(
+        [
+          formatErrorMessage(error),
+          `Git commit, tag, and push already completed for ${tag}.`,
+          `After fixing npm access, publish manually with \`npm publish --tag ${npmDistTag}\` from this version, or run a dedicated recovery flow when available.`,
+        ].join("\n"),
+      );
+    }
+  }
+
   if (githubPlan.action === "create") {
     if (githubToken === null || githubRepository === null) {
       throw new Error("GitHub Release requirements were not resolved.");
     }
 
-    await createGithubRelease({
-      repository: githubRepository,
-      token: githubToken,
-      tag,
-      notes: releaseContent || `Release ${tag}\n`,
-      prerelease: resolvedVersion.isPrerelease,
-    });
+    try {
+      await createGithubRelease({
+        repository: githubRepository,
+        token: githubToken,
+        tag,
+        notes: releaseContent || `Release ${tag}\n`,
+        prerelease: resolvedVersion.isPrerelease,
+      });
+    } catch (error) {
+      throw new Error(
+        [
+          formatErrorMessage(error),
+          `Git commit, tag, and push already completed for ${tag}.`,
+          "Fix the GitHub token permissions, then create the GitHub Release from the existing tag instead of rerunning the full publish flow.",
+        ].join("\n"),
+      );
+    }
   }
 
   log.success(`Published ${nextVersion}`);
@@ -264,6 +360,13 @@ async function prepareCommitFlow(
     }
 
     if (strategy === "strict") {
+      if (status.staged.length > 0) {
+        log.warn(
+          "Strict mode cannot continue while files are already staged. Commit or unstage them first, or choose additional commit.",
+        );
+        return { shouldContinue: false, shouldReloadCommits: false };
+      }
+
       log.info(
         "Using detected commits only. Unstaged files will not be staged.",
       );
@@ -331,11 +434,84 @@ async function commitStagedFiles(
   return "committed";
 }
 
+async function promptPublishTargets(
+  currentTargets: PublishTarget[],
+): Promise<PublishTarget[] | null> {
+  const selectedTargets = await select<PublishTargetChoice>({
+    message: "Where should recon publish this release?",
+    initialValue: getPublishTargetChoice(currentTargets),
+    options: [
+      {
+        value: "all",
+        label: "All",
+        hint: "GitHub Release and npm publish",
+      },
+      {
+        value: "github",
+        label: "GitHub",
+        hint: "create GitHub Release",
+      },
+      {
+        value: "npm",
+        label: "npm",
+        hint: "publish package to npm registry",
+      },
+    ],
+  });
+
+  if (isCancel(selectedTargets)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  if (selectedTargets === "all") return ["github", "npm"];
+
+  return [selectedTargets];
+}
+
+function applySelectedPublishTargets(
+  config: ReconConfig,
+  targets: PublishTarget[],
+): ReconConfig {
+  return {
+    ...config,
+    publish: {
+      targets,
+    },
+    github: {
+      ...config.github,
+      release: {
+        ...config.github.release,
+        enabled: targets.includes("github")
+          ? config.github.release.enabled === false
+            ? "auto"
+            : config.github.release.enabled
+          : false,
+      },
+    },
+    npm: {
+      ...config.npm,
+      publish: {
+        ...config.npm.publish,
+        enabled: targets.includes("npm")
+          ? config.npm.publish.enabled === false
+            ? "auto"
+            : config.npm.publish.enabled
+          : false,
+      },
+    },
+  };
+}
+
 async function promptMissingGithubToken(
   cwd: string,
   config: ReconConfig,
   dryRun: boolean,
 ): Promise<ReconConfig | null> {
+  if (!config.publish.targets.includes("github")) {
+    return config;
+  }
+
   if (!shouldPromptForGithubToken(config.github.release, { dryRun })) {
     return config;
   }
@@ -401,6 +577,84 @@ async function promptMissingGithubToken(
 
   await writeReconConfig(cwd, updatedConfig);
   log.success("GITHUB_TOKEN saved in recon.json.");
+
+  return updatedConfig;
+}
+
+async function promptMissingNpmToken(
+  cwd: string,
+  config: ReconConfig,
+  dryRun: boolean,
+): Promise<ReconConfig | null> {
+  if (!config.publish.targets.includes("npm")) {
+    return config;
+  }
+
+  if (!shouldPromptForNpmToken(config.npm.publish, { dryRun })) {
+    return config;
+  }
+
+  note(
+    [
+      "NPM_TOKEN is empty in recon.json.",
+      "npm publish needs this token, but Git release flow can continue without publishing to npm.",
+    ].join("\n"),
+    "npm publish token",
+  );
+
+  const tokenAction = await select<"input" | "skip">({
+    message: "How do you want to continue?",
+    initialValue: "input",
+    options: [
+      {
+        value: "input",
+        label: "Input npm token",
+        hint: "save token to recon.json, then continue",
+      },
+      {
+        value: "skip",
+        label: "Skip npm publish",
+        hint: "continue without npm publish",
+      },
+    ],
+  });
+
+  if (isCancel(tokenAction)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  if (tokenAction === "skip") {
+    log.warn("npm publish skipped for this publish.");
+    return withNpmPublishSkipped(config);
+  }
+
+  await ensureReconConfigIgnored(cwd);
+
+  if (isGitTracked(cwd, "recon.json")) {
+    throw new Error(
+      "Cannot save NPM_TOKEN because recon.json is tracked by Git. Run `git rm --cached recon.json`, then rerun `recon publish`.",
+    );
+  }
+
+  const token = await password({
+    message: "Enter npm token (Automation token recommended)",
+    validate(value) {
+      if (!value || value.trim().length === 0) {
+        return "NPM_TOKEN is required.";
+      }
+    },
+  });
+
+  if (isCancel(token)) {
+    cancel("Operation cancelled.");
+    return null;
+  }
+
+  const updatedConfig = withNpmPublishToken(config, token);
+
+  await writeReconConfig(cwd, updatedConfig);
+  log.success("NPM_TOKEN saved in recon.json.");
 
   return updatedConfig;
 }
@@ -508,6 +762,43 @@ function formatGithubDryRunPlan(
   plan: ReturnType<typeof resolveGithubReleaseDryRunPlan>,
 ): string {
   return `${plan.action} (${plan.reason})`;
+}
+
+function formatNpmPublishPlan(
+  plan: ReturnType<typeof resolveNpmPublishPlan>,
+): string {
+  if (plan.action === "publish") {
+    return "publish (npm publish requirements are satisfied.)";
+  }
+
+  return `${plan.action} (${plan.reason})`;
+}
+
+function resolveNpmDistTag(
+  config: ReconConfig,
+  selection: ReleaseSelection,
+): string {
+  const distTag =
+    selection.kind === "prerelease"
+      ? selection.channel.name
+      : config.npm.publish.tag;
+
+  if (!isValidNpmDistTag(distTag)) {
+    throw new Error(`Invalid npm dist-tag: ${distTag}`);
+  }
+
+  return distTag;
+}
+
+function getPublishTargetChoice(targets: PublishTarget[]): PublishTargetChoice {
+  if (targets.includes("github") && targets.includes("npm")) return "all";
+  if (targets.includes("npm")) return "npm";
+
+  return "github";
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function getReleaseCommits(

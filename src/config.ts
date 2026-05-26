@@ -3,6 +3,9 @@ import { join } from "node:path";
 
 export type PackageManager = "npm" | "pnpm" | "yarn";
 export type GithubReleaseEnabled = boolean | "auto";
+export type PublishTarget = "github" | "npm";
+export type NpmPublishEnabled = boolean | "auto";
+export type NpmPublishAccess = "public" | "restricted";
 
 export interface PrereleaseChannel {
   name: string;
@@ -20,6 +23,14 @@ export interface GithubReleaseConfig {
   prerelease: PrereleaseConfig;
 }
 
+export interface NpmPublishConfig {
+  NPM_TOKEN: string;
+  enabled: NpmPublishEnabled;
+  registry: string;
+  access: NpmPublishAccess;
+  tag: string;
+}
+
 export type ChangelogType =
   | {
       type: string;
@@ -34,17 +45,26 @@ export type ChangelogType =
 export interface ReconConfig {
   $schema?: string;
   packageManager: PackageManager;
+  publish: {
+    targets: PublishTarget[];
+  };
   changelog: {
     types: ChangelogType[];
   };
   github: {
     release: GithubReleaseConfig;
   };
+  npm: {
+    publish: NpmPublishConfig;
+  };
 }
 
 export const defaultReconConfig: ReconConfig = {
   $schema: "https://licentora.com/recon-schema.json",
   packageManager: "npm",
+  publish: {
+    targets: ["github"],
+  },
   changelog: {
     types: [
       { type: "feat", section: "Features" },
@@ -70,6 +90,15 @@ export const defaultReconConfig: ReconConfig = {
       },
     },
   },
+  npm: {
+    publish: {
+      NPM_TOKEN: "",
+      enabled: false,
+      registry: "https://registry.npmjs.org/",
+      access: "public",
+      tag: "latest",
+    },
+  },
 };
 
 export function createDefaultReconConfig(
@@ -77,6 +106,8 @@ export function createDefaultReconConfig(
   options: {
     githubReleaseEnabled?: GithubReleaseEnabled;
     defaultPrereleaseChannel?: string;
+    publishTargets?: PublishTarget[];
+    npmPublishEnabled?: NpmPublishEnabled;
   } = {},
 ): ReconConfig {
   const githubRelease = {
@@ -99,6 +130,11 @@ export function createDefaultReconConfig(
   return {
     ...defaultReconConfig,
     packageManager,
+    publish: {
+      targets: normalizePublishTargets(
+        options.publishTargets ?? defaultReconConfig.publish.targets,
+      ),
+    },
     changelog: {
       types: defaultReconConfig.changelog.types.map((typeConfig) => ({
         ...typeConfig,
@@ -106,6 +142,13 @@ export function createDefaultReconConfig(
     },
     github: {
       release: githubRelease,
+    },
+    npm: {
+      publish: {
+        ...defaultReconConfig.npm.publish,
+        enabled:
+          options.npmPublishEnabled ?? defaultReconConfig.npm.publish.enabled,
+      },
     },
   };
 }
@@ -166,9 +209,13 @@ export function validateReconConfig(config: unknown): ReconConfig {
   return {
     ...config,
     packageManager: config.packageManager,
+    publish: validatePublishConfig(config),
     changelog: config.changelog,
     github: {
       release: validateGithubReleaseConfig(config.github),
+    },
+    npm: {
+      publish: validateNpmPublishConfig(config.npm),
     },
   } as unknown as ReconConfig;
 }
@@ -231,6 +278,93 @@ function validateGithubReleaseConfig(github: unknown): GithubReleaseConfig {
     GITHUB_TOKEN: token,
     enabled,
     prerelease: validatePrereleaseConfig(release),
+  };
+}
+
+function validatePublishConfig(config: Record<string, unknown>): {
+  targets: PublishTarget[];
+} {
+  if (isRecord(config.publish)) {
+    const targets = config.publish.targets;
+
+    if (!Array.isArray(targets)) {
+      throw new Error("publish.targets must contain an array.");
+    }
+
+    return {
+      targets: normalizePublishTargets(targets),
+    };
+  }
+
+  const githubRelease = validateGithubReleaseConfig(config.github);
+
+  return {
+    targets: githubRelease.enabled === false ? [] : ["github"],
+  };
+}
+
+export function normalizePublishTargets(targets: unknown[]): PublishTarget[] {
+  const normalizedTargets = targets.filter(
+    (target): target is PublishTarget =>
+      target === "github" || target === "npm",
+  );
+  const uniqueTargets = [...new Set(normalizedTargets)];
+
+  if (uniqueTargets.length !== targets.length) {
+    throw new Error("publish.targets must only contain github or npm.");
+  }
+
+  return uniqueTargets;
+}
+
+function validateNpmPublishConfig(npm: unknown): NpmPublishConfig {
+  if (npm === undefined) {
+    return { ...defaultReconConfig.npm.publish };
+  }
+
+  if (!isRecord(npm)) {
+    throw new Error("npm must contain an object.");
+  }
+
+  if (npm.publish === undefined) {
+    return { ...defaultReconConfig.npm.publish };
+  }
+
+  if (!isRecord(npm.publish)) {
+    throw new Error("npm.publish must contain an object.");
+  }
+
+  const publish = npm.publish;
+  const token = typeof publish.NPM_TOKEN === "string" ? publish.NPM_TOKEN : "";
+  const enabled = publish.enabled ?? defaultReconConfig.npm.publish.enabled;
+  const registry =
+    typeof publish.registry === "string" && publish.registry.length > 0
+      ? normalizeNpmRegistry(publish.registry)
+      : defaultReconConfig.npm.publish.registry;
+  const access = publish.access ?? defaultReconConfig.npm.publish.access;
+  const tag =
+    typeof publish.tag === "string" && publish.tag.length > 0
+      ? publish.tag
+      : defaultReconConfig.npm.publish.tag;
+
+  if (enabled !== true && enabled !== false && enabled !== "auto") {
+    throw new Error("npm.publish.enabled must be true, false, or auto.");
+  }
+
+  if (access !== "public" && access !== "restricted") {
+    throw new Error("npm.publish.access must be public or restricted.");
+  }
+
+  if (!isValidNpmDistTag(tag)) {
+    throw new Error(`Invalid npm dist-tag: ${tag}`);
+  }
+
+  return {
+    NPM_TOKEN: token,
+    enabled,
+    registry,
+    access,
+    tag,
   };
 }
 
@@ -343,6 +477,44 @@ function isValidPrereleaseIdentifier(identifier: string): boolean {
 
     return true;
   });
+}
+
+export function isValidNpmDistTag(tag: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9._-]*$/.test(tag);
+}
+
+function normalizeNpmRegistry(registry: string): string {
+  let url: URL;
+
+  try {
+    url = new URL(registry);
+  } catch {
+    throw new Error(`Invalid npm registry URL: ${registry}`);
+  }
+
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("npm.publish.registry must use http or https.");
+  }
+
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      "npm.publish.registry must not include credentials, query, or hash.",
+    );
+  }
+
+  if (url.hostname.length === 0) {
+    throw new Error("npm.publish.registry must include a hostname.");
+  }
+
+  if (!/^[A-Za-z0-9._~!$'()*+,;=:@/-]*$/.test(url.pathname)) {
+    throw new Error("npm.publish.registry contains unsupported characters.");
+  }
+
+  if (!url.pathname.endsWith("/")) {
+    url.pathname = `${url.pathname}/`;
+  }
+
+  return url.toString();
 }
 
 async function readTextFile(

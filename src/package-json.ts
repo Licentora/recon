@@ -2,8 +2,21 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 interface PackageJson {
+  name?: unknown;
   version?: unknown;
   [key: string]: unknown;
+}
+
+export async function readPackageName(cwd: string): Promise<string> {
+  const packageJson = JSON.parse(
+    await readFile(join(cwd, "package.json"), "utf8"),
+  ) as PackageJson;
+
+  if (typeof packageJson.name !== "string") {
+    throw new Error("package.json must include a name field.");
+  }
+
+  return packageJson.name;
 }
 
 export async function readPackageVersion(cwd: string): Promise<string> {

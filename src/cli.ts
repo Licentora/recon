@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   }
 
   if (args.command === "init") {
-    await runInit(cwd);
+    await runInit(cwd, { target: args.initTarget });
     return;
   }
 
@@ -52,6 +52,8 @@ Usage:
   recon -h, --help          Show help
   recon -v, --version       Show package version
   recon init                Create recon.json
+  recon init --github, -gh  Add GitHub Release setup to recon.json
+  recon init --npm, -n      Add npm publish setup to recon.json
   recon publish             Commit, version, changelog, tag, and push release
   recon publish --dry       Preview release without changing files
   recon publish --dry-run   Preview release without changing files

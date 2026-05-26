@@ -33,20 +33,21 @@ export type FetchLike = (
 }>;
 
 export function parseGitHubRemote(remoteUrl: string): GitHubRepository | null {
-  const httpsMatch = /^https:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/.exec(
-    remoteUrl,
-  );
+  const httpsMatch =
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(remoteUrl);
 
-  if (httpsMatch) {
+  if (httpsMatch && isValidGitHubRepository(httpsMatch[1], httpsMatch[2])) {
     return {
       owner: httpsMatch[1],
       repo: httpsMatch[2],
     };
   }
 
-  const sshMatch = /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/.exec(remoteUrl);
+  const sshMatch = /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/.exec(
+    remoteUrl,
+  );
 
-  if (sshMatch) {
+  if (sshMatch && isValidGitHubRepository(sshMatch[1], sshMatch[2])) {
     return {
       owner: sshMatch[1],
       repo: sshMatch[2],
@@ -54,9 +55,9 @@ export function parseGitHubRemote(remoteUrl: string): GitHubRepository | null {
   }
 
   const sshUrlMatch =
-    /^ssh:\/\/git@github\.com\/([^/]+)\/(.+?)(?:\.git)?$/.exec(remoteUrl);
+    /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(remoteUrl);
 
-  if (sshUrlMatch) {
+  if (sshUrlMatch && isValidGitHubRepository(sshUrlMatch[1], sshUrlMatch[2])) {
     return {
       owner: sshUrlMatch[1],
       repo: sshUrlMatch[2],
@@ -100,6 +101,9 @@ export function withGithubReleaseToken(
 export function withGithubReleaseSkipped(config: ReconConfig): ReconConfig {
   return {
     ...config,
+    publish: {
+      targets: config.publish.targets.filter((target) => target !== "github"),
+    },
     github: {
       ...config.github,
       release: {
@@ -208,6 +212,7 @@ export async function createGithubRelease(
     throw new Error(
       `GitHub Release API failed (${response.status}): ${formatGithubApiError(
         responseText,
+        response.status,
       )}`,
     );
   }
@@ -216,19 +221,38 @@ export async function createGithubRelease(
 function normalizeToken(token: string | undefined): string | null {
   if (token === undefined || token.trim().length === 0) return null;
 
-  return token.trim();
+  const normalizedToken = token.trim();
+
+  if (/[\r\n]/.test(normalizedToken)) {
+    throw new Error("GITHUB_TOKEN must not contain line breaks.");
+  }
+
+  return normalizedToken;
 }
 
-function formatGithubApiError(responseText: string): string {
+function formatGithubApiError(responseText: string, status: number): string {
+  let message = responseText.length > 0 ? responseText : "Unknown error";
+
   try {
     const parsed = JSON.parse(responseText) as { message?: unknown };
 
     if (typeof parsed.message === "string") {
-      return parsed.message;
+      message = parsed.message;
     }
   } catch {
     // Fall through to raw response body.
   }
 
-  return responseText.length > 0 ? responseText : "Unknown error";
+  if (status === 401 || status === 403) {
+    return `${message}. Make sure GITHUB_TOKEN can access this repository and has Contents: Read and write permission. For fine-grained tokens, select the target repository explicitly.`;
+  }
+
+  return message;
+}
+
+function isValidGitHubRepository(owner: string, repo: string): boolean {
+  return (
+    /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner) &&
+    /^[A-Za-z0-9._-]+$/.test(repo)
+  );
 }
